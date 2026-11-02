@@ -1,0 +1,118 @@
+name: Build Telegram APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      abi:
+        description: 'Which APK(s) to build'
+        default: 'both'
+        type: choice
+        options: ['both', 'arm64', 'universal']
+
+permissions:
+  contents: write
+
+env:
+  APP_VERSION: 13.1.1
+
+jobs:
+  build:
+    name: Build ${{ matrix.abi }} APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: ${{ fromJSON(inputs.abi == 'arm64' && '["arm64"]' || inputs.abi == 'universal' && '["universal"]' || '["arm64", "universal"]') }}
+    steps:
+      - name: Free disk space + add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/lib/android "$AGENT_TOOLSDIRECTORY" 2>/dev/null || true
+          sudo docker image prune -af 2>/dev/null || true
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          df -h
+          free -h
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Init submodules (shallow)
+        run: |
+          git config --global protocol.version 2
+          git submodule update --init --recursive --depth=1 --jobs=8
+          echo "--- submodule status ---"
+          git submodule status | head -40
+          df -h
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages (API 36, NDK, CMake)
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1" "platform-tools"
+          "$ANDROID_HOME/ndk/27.2.12479018/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" --version | head -2
+          df -h
+
+      - name: Restrict to arm64 (faster build)
+        if: matrix.abi == 'arm64'
+        run: |
+          sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a"/' TMessagesProj_App/build.gradle
+          grep -n "abiFilters" TMessagesProj_App/build.gradle
+
+      - name: Build release APK
+        run: ./gradlew :TMessagesProj_App:assembleAfatRelease --stacktrace
+
+      - name: Collect APK
+        run: |
+          ls -lh TMessagesProj_App/build/outputs/apk/afat/release/
+          cp TMessagesProj_App/build/outputs/apk/afat/release/app.apk "Telegram-${{ env.APP_VERSION }}-${{ matrix.abi }}.apk"
+          sha256sum "Telegram-${{ env.APP_VERSION }}-${{ matrix.abi }}.apk" | tee "Telegram-${{ env.APP_VERSION }}-${{ matrix.abi }}.apk.sha256"
+          ls -lh Telegram-*
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-apk-${{ matrix.abi }}
+          path: Telegram-*
+          if-no-files-found: error
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ env.APP_VERSION }}-${{ matrix.abi }}-${{ github.run_number }}
+          name: Telegram ${{ env.APP_VERSION }} APK (${{ matrix.abi }})
+          body: |
+            Unofficial build of Telegram for Android v${{ env.APP_VERSION }} compiled from source.
+            بیلد غیررسمی تلگرام اندروید نسخه ${{ env.APP_VERSION }} کامپایل‌شده از سورس.
+
+            **Which file should I download? / کدام فایل را دانلود کنم؟**
+            - `Telegram-${{ env.APP_VERSION }}-arm64.apk` — for almost all modern phones (64-bit). / برای اکثر گوشی‌های جدید (۶۴ بیتی).
+            - `Telegram-${{ env.APP_VERSION }}-universal.apk` — works on every device (ARM 32/64-bit, x86). / برای همه دستگاه‌ها.
+
+            **Install / نصب:**
+            1. This APK is signed with a different key than the official Telegram, so you must uninstall the official Telegram app first (your chats are stored in the cloud, nothing is lost). / چون امضای این فایل با تلگرام رسمی فرق دارد، اول باید تلگرام رسمی را حذف کنید (چت‌ها روی فضای ابری ذخیره‌اند و چیزی از دست نمی‌رود).
+            2. Download the APK on your phone, open it and allow "Install unknown apps" if asked. / فایل را در گوشی دانلود و باز کنید و در صورت نیاز اجازه «نصب برنامه‌های ناشناس» را بدهید.
+            3. Log in with your phone number. / با شماره موبایل وارد شوید.
+
+            SHA-256 checksum is in the `.sha256` file. / کد صحت فایل در فایل `.sha256` است.
+          files: Telegram-*
+          prerelease: true
