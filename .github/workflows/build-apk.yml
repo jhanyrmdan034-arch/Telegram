@@ -1,6 +1,9 @@
 name: Build Telegram APK
 
 on:
+  push:
+    branches: ['arena/42f78b0d-telegram']
+    paths: ['.github/workflows/build-apk.yml']
   workflow_dispatch:
     inputs:
       abi:
