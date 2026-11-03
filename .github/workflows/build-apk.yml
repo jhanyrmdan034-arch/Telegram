@@ -88,19 +88,19 @@ jobs:
           sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=$NEW_PKG/" gradle.properties
           grep "^APP_PACKAGE=" gradle.properties
           NEW_PKG="$NEW_PKG" python3 - <<'PYEOF'
-          import json, os
-          p = 'TMessagesProj/google-services.json'
-          with open(p) as f:
-              d = json.load(f)
+          import json, os, glob
           new_pkg = os.environ['NEW_PKG']
-          if all(c['client_info']['android_client_info']['package_name'] != new_pkg for c in d['client']):
-              client = json.loads(json.dumps(d['client'][0]))
-              client['client_info']['android_client_info']['package_name'] = new_pkg
-              d['client'].append(client)
-              with open(p, 'w') as f:
-                  json.dump(d, f, indent=2)
-                  f.write('\n')
-          print([c['client_info']['android_client_info']['package_name'] for c in d['client']])
+          for p in sorted(glob.glob('*/google-services.json')):
+              with open(p) as f:
+                  d = json.load(f)
+              if all(c['client_info']['android_client_info']['package_name'] != new_pkg for c in d['client']):
+                  client = json.loads(json.dumps(d['client'][0]))
+                  client['client_info']['android_client_info']['package_name'] = new_pkg
+                  d['client'].append(client)
+                  with open(p, 'w') as f:
+                      json.dump(d, f, indent=2)
+                      f.write('\n')
+              print(p, '->', [c['client_info']['android_client_info']['package_name'] for c in d['client']])
           PYEOF
           grep -rl 'name="AppName"' TMessagesProj/src/main/res/ | xargs sed -i 's|\(<string name="AppName"[^>]*>\)[^<]*|\1Telegram 2|'
           echo "--- AppName values ---"
