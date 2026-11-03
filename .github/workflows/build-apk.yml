@@ -81,6 +81,31 @@ jobs:
           sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a"/' TMessagesProj_App/build.gradle
           grep -n "abiFilters" TMessagesProj_App/build.gradle
 
+      - name: Use separate package name (install alongside official app)
+        run: |
+          NEW_PKG="org.telegram.messenger.fork"
+          echo "NEW_PKG=$NEW_PKG"
+          sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=$NEW_PKG/" gradle.properties
+          grep "^APP_PACKAGE=" gradle.properties
+          NEW_PKG="$NEW_PKG" python3 - <<'PYEOF'
+          import json, os
+          p = 'TMessagesProj/google-services.json'
+          with open(p) as f:
+              d = json.load(f)
+          new_pkg = os.environ['NEW_PKG']
+          if all(c['client_info']['android_client_info']['package_name'] != new_pkg for c in d['client']):
+              client = json.loads(json.dumps(d['client'][0]))
+              client['client_info']['android_client_info']['package_name'] = new_pkg
+              d['client'].append(client)
+              with open(p, 'w') as f:
+                  json.dump(d, f, indent=2)
+                  f.write('\n')
+          print([c['client_info']['android_client_info']['package_name'] for c in d['client']])
+          PYEOF
+          grep -rl 'name="AppName"' TMessagesProj/src/main/res/ | xargs sed -i 's|\(<string name="AppName"[^>]*>\)[^<]*|\1Telegram 2|'
+          echo "--- AppName values ---"
+          grep -rh 'name="AppName"' TMessagesProj/src/main/res/ | sort -u
+
       - name: Build release APK
         run: ./gradlew :TMessagesProj_App:assembleAfatRelease --stacktrace
 
@@ -111,10 +136,12 @@ jobs:
             - `Telegram-${{ env.APP_VERSION }}-arm64.apk` — for almost all modern phones (64-bit). / برای اکثر گوشی‌های جدید (۶۴ بیتی).
             - `Telegram-${{ env.APP_VERSION }}-universal.apk` — works on every device (ARM 32/64-bit, x86). / برای همه دستگاه‌ها.
 
+            This build uses its own package name, so it installs **alongside** the official Telegram as a separate app called **"Telegram 2"** — no need to uninstall anything.
+            این نسخه پکیج‌نیم جداگانه دارد و **کنار** تلگرام رسمی با نام **«Telegram 2»** نصب می‌شود — نیازی به حذف چیزی نیست.
+
             **Install / نصب:**
-            1. This APK is signed with a different key than the official Telegram, so you must uninstall the official Telegram app first (your chats are stored in the cloud, nothing is lost). / چون امضای این فایل با تلگرام رسمی فرق دارد، اول باید تلگرام رسمی را حذف کنید (چت‌ها روی فضای ابری ذخیره‌اند و چیزی از دست نمی‌رود).
-            2. Download the APK on your phone, open it and allow "Install unknown apps" if asked. / فایل را در گوشی دانلود و باز کنید و در صورت نیاز اجازه «نصب برنامه‌های ناشناس» را بدهید.
-            3. Log in with your phone number. / با شماره موبایل وارد شوید.
+            1. Download the APK on your phone, open it and allow "Install unknown apps" if asked. / فایل را در گوشی دانلود و باز کنید و در صورت نیاز اجازه «نصب برنامه‌های ناشناس» را بدهید.
+            2. Log in with your phone number (you can use a different account than your main Telegram). / با شماره موبایل وارد شوید (می‌توانید اکانت متفاوتی از تلگرام اصلی داشته باشید).
 
             SHA-256 checksum is in the `.sha256` file. / کد صحت فایل در فایل `.sha256` است.
           files: Telegram-*
