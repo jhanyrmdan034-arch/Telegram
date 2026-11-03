@@ -338,8 +338,10 @@ public final class MessengerApiClient {
         TLRPC.TL_messages_peerDialogs result = new TLRPC.TL_messages_peerDialogs();
         Set<Long> includedUsers = new HashSet<>();
         for (TLRPC.InputDialogPeer inputDialogPeer : request.peers) {
-            if (inputDialogPeer == null || inputDialogPeer.peer == null) continue;
-            long peerId = inputPeerUserId(inputDialogPeer.peer);
+            if (!(inputDialogPeer instanceof TLRPC.TL_inputDialogPeer)) continue;
+            TLRPC.InputPeer inputPeer = ((TLRPC.TL_inputDialogPeer) inputDialogPeer).peer;
+            if (inputPeer == null) continue;
+            long peerId = inputPeerUserId(inputPeer);
             if (peerId <= 0 || peerId == currentUserId()) continue;
             long conversationId = createOrGetConversation(peerId);
             conversationIdsByPeer.put(peerId, conversationId);
