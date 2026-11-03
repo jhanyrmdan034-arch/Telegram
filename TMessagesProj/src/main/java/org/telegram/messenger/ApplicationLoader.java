@@ -262,7 +262,9 @@ public class ApplicationLoader extends Application {
         }
 
         ApplicationLoader app = (ApplicationLoader) ApplicationLoader.applicationContext;
-        app.initPushServices();
+        if (!BuildVars.MESSENGER_API_ENABLED) {
+            app.initPushServices();
+        }
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d("app initied");
         }
@@ -365,6 +367,10 @@ public class ApplicationLoader extends Application {
     });
 
     public static void startPushService() {
+        if (BuildVars.MESSENGER_API_ENABLED) {
+            applicationContext.stopService(new Intent(applicationContext, NotificationsService.class));
+            return;
+        }
         SharedPreferences preferences = MessagesController.getGlobalNotificationsSettings();
         boolean enabled;
         if (preferences.contains("pushService")) {

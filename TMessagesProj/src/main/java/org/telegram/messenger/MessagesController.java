@@ -16127,6 +16127,9 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void performLogout(int type) {
+        if (BuildVars.MESSENGER_API_ENABLED) {
+            MessengerApiClient.getInstance(currentAccount).endSession();
+        }
         if (type == 1) {
             GramWalletStorage.wipeForUser(ApplicationLoader.applicationContext, currentAccount, getUserConfig().getClientUserId());
             unregistedPush();
@@ -16182,6 +16185,7 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void registerForPush(@PushListenerController.PushType int pushType, String regid) {
+        if (BuildVars.MESSENGER_API_ENABLED) return;
         if (TextUtils.isEmpty(regid) || registeringForPush || getUserConfig().getClientUserId() == 0) {
             return;
         }

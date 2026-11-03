@@ -138,6 +138,12 @@ android {
         minSdkVersion 23
         targetSdkVersion 36
 
+        def messengerApiBaseUrl = rootProject.findProperty('MESSENGER_API_BASE_URL') ?: System.getenv('MESSENGER_API_BASE_URL') ?: 'http://10.0.2.2:8080'
+        def messengerApiBaseUrlLiteral = groovy.json.JsonOutput.toJson(messengerApiBaseUrl.toString())
+        def messengerApiEnabled = (rootProject.findProperty('MESSENGER_API_ENABLED') ?: System.getenv('MESSENGER_API_ENABLED') ?: 'true').toString().toBoolean()
+        buildConfigField 'boolean', 'MESSENGER_API_ENABLED', messengerApiEnabled.toString()
+        buildConfigField "String", "MESSENGER_API_BASE_URL", messengerApiBaseUrlLiteral
+
         vectorDrawables.generatedDensities = ['mdpi', 'hdpi', 'xhdpi', 'xxhdpi']
 
         multiDexEnabled true

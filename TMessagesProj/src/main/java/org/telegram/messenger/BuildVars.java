@@ -25,6 +25,8 @@ public class BuildVars {
     public static boolean CHECK_UPDATES = true;
     public static boolean NO_SCOPED_STORAGE = Build.VERSION.SDK_INT <= 29;
     public static String BUILD_VERSION_STRING = BuildConfig.BUILD_VERSION_STRING;
+    public static final boolean MESSENGER_API_ENABLED = BuildConfig.MESSENGER_API_ENABLED;
+    public static final String MESSENGER_API_BASE_URL = BuildConfig.MESSENGER_API_BASE_URL;
 
     public static int APP_ID = 4;
     public static String APP_HASH = "014b35b6184100b085b0d0572f9b5103";

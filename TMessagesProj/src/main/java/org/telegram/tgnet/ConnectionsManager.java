@@ -39,6 +39,7 @@ import org.telegram.messenger.FileUploadOperation;
 import org.telegram.messenger.KeepAliveJob;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MessagesController;
+import org.telegram.messenger.MessengerApiClient;
 import org.telegram.messenger.NotificationCenter;
 import org.telegram.messenger.PushListenerController;
 import org.telegram.messenger.SharedConfig;
@@ -67,11 +68,13 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.TimeZone;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
@@ -148,6 +151,8 @@ public class ConnectionsManager extends BaseController {
     };
 
     private boolean forceTryIpV6;
+    private final ConcurrentHashMap<Integer, Future<?>> messengerApiRequests = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Integer, Integer> messengerApiRequestGuids = new ConcurrentHashMap<>();
 
     static {
         ThreadPoolExecutor threadPoolExecutor = new ThreadPoolExecutor(CORE_POOL_SIZE, MAXIMUM_POOL_SIZE, KEEP_ALIVE_SECONDS, TimeUnit.SECONDS, sPoolWorkQueue, sThreadFactory);
@@ -163,12 +168,14 @@ public class ConnectionsManager extends BaseController {
     }
 
     public void discardConnection(int dcId, int connectionType) {
+        if (BuildVars.MESSENGER_API_ENABLED) return;
         Utilities.stageQueue.postRunnable(() -> {
             native_discardConnection(currentAccount, dcId, connectionType);
         });
     }
 
     public void failNotRunningRequest(int requestToken) {
+        if (BuildVars.MESSENGER_API_ENABLED) return;
         Utilities.stageQueue.postRunnable(() -> {
             native_failNotRunningRequest(currentAccount, requestToken);
         });
@@ -396,6 +403,43 @@ public class ConnectionsManager extends BaseController {
     }
 
     private void sendRequestInternal(TLObject object, RequestDelegate onComplete, RequestDelegateTimestamp onCompleteTimestamp, QuickAckDelegate onQuickAck, WriteToSocketDelegate onWriteToSocket, int flags, int datacenterId, int connectionType, boolean immediate, int requestToken) {
+        if (BuildVars.MESSENGER_API_ENABLED) {
+            Future<?> future = MessengerApiClient.getInstance(currentAccount).executeRequest(object, (response, error) -> {
+                Utilities.stageQueue.postRunnable(() -> {
+                    messengerApiRequests.remove(requestToken);
+                    messengerApiRequestGuids.remove(requestToken);
+                    try {
+                        int previousConnectionState = connectionState;
+                        if (error == null) {
+                            connectionState = ConnectionStateConnected;
+                        } else if (error.code >= 502) {
+                            connectionState = ConnectionStateWaitingForNetwork;
+                        }
+                        if (previousConnectionState != connectionState) {
+                            AndroidUtilities.runOnUIThread(() -> NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.didUpdateConnectionState));
+                        }
+                        if (response != null) {
+                            response.networkType = ApplicationLoader.getCurrentNetworkType();
+                        }
+                        if (onComplete != null) {
+                            onComplete.run(response, error);
+                        } else if (onCompleteTimestamp != null) {
+                            onCompleteTimestamp.run(response, error, System.currentTimeMillis());
+                        } else if (response instanceof TLRPC.Updates) {
+                            KeepAliveJob.finishJob();
+                            AccountInstance.getInstance(currentAccount).getMessagesController().processUpdates((TLRPC.Updates) response, false);
+                        }
+                    } catch (Exception e) {
+                        FileLog.e(e);
+                    } finally {
+                        if (response != null) response.freeResources();
+                    }
+                });
+            });
+            messengerApiRequests.put(requestToken, future);
+            if (future.isDone()) messengerApiRequests.remove(requestToken);
+            return;
+        }
         if (BuildVars.LOGS_ENABLED) {
             FileLog.d("send request " + object + " with token = " + requestToken);
         }
@@ -591,6 +635,13 @@ public class ConnectionsManager extends BaseController {
 
     public void cancelRequest(int token, boolean notifyServer, Runnable onCancelled) {
         Utilities.stageQueue.postRunnable(() -> {
+            if (BuildVars.MESSENGER_API_ENABLED) {
+                Future<?> future = messengerApiRequests.remove(token);
+                messengerApiRequestGuids.remove(token);
+                if (future != null) future.cancel(true);
+                if (onCancelled != null) onCancelled.run();
+                return;
+            }
             if (onCancelled != null) {
                 listenCancel(token, () -> {
                     Utilities.stageQueue.postRunnable(onCancelled);
@@ -606,6 +657,17 @@ public class ConnectionsManager extends BaseController {
 
     public void cancelRequestsForGuid(int guid) {
         Utilities.stageQueue.postRunnable(() -> {
+            if (BuildVars.MESSENGER_API_ENABLED) {
+                for (Map.Entry<Integer, Integer> entry : messengerApiRequestGuids.entrySet()) {
+                    if (entry.getValue() == guid) {
+                        int token = entry.getKey();
+                        messengerApiRequestGuids.remove(token);
+                        Future<?> future = messengerApiRequests.remove(token);
+                        if (future != null) future.cancel(true);
+                    }
+                }
+                return;
+            }
             native_cancelRequestsForGuid(currentAccount, guid);
         });
     }
@@ -614,11 +676,15 @@ public class ConnectionsManager extends BaseController {
         if (guid == 0) {
             return;
         }
+        if (BuildVars.MESSENGER_API_ENABLED) {
+            messengerApiRequestGuids.put(requestToken, guid);
+            return;
+        }
         native_bindRequestToGuid(currentAccount, requestToken, guid);
     }
 
     public void applyDatacenterAddress(int datacenterId, String ipAddress, int port) {
-        native_applyDatacenterAddress(currentAccount, datacenterId, ipAddress, port);
+        if (!BuildVars.MESSENGER_API_ENABLED) native_applyDatacenterAddress(currentAccount, datacenterId, ipAddress, port);
     }
 
     public int getConnectionState() {
@@ -638,17 +704,17 @@ public class ConnectionsManager extends BaseController {
             FileLog.d("selected ip strategy " + selectedStrategy);
         }
         native_setIpStrategy(currentAccount, selectedStrategy);
-        native_setNetworkAvailable(currentAccount, ApplicationLoader.isNetworkOnline(), ApplicationLoader.getCurrentNetworkType(), ApplicationLoader.isConnectionSlow());
+        native_setNetworkAvailable(currentAccount, !BuildVars.MESSENGER_API_ENABLED && ApplicationLoader.isNetworkOnline(), ApplicationLoader.getCurrentNetworkType(), ApplicationLoader.isConnectionSlow());
     }
 
     public void setPushConnectionEnabled(boolean value) {
-        native_setPushConnectionEnabled(currentAccount, value);
+        if (!BuildVars.MESSENGER_API_ENABLED) native_setPushConnectionEnabled(currentAccount, value);
     }
 
     public void init(int version, int layer, int apiId, String deviceModel, String systemVersion, String appVersion, String langCode, String systemLangCode, String configPath, String logPath, String regId, String cFingerprint, int timezoneOffset, long userId, boolean userPremium, boolean enablePushConnection) {
         final SharedPreferences preferences = ApplicationLoader.applicationContext.getSharedPreferences("mainconfig", Activity.MODE_PRIVATE);
         final ProxySettings proxySettings = ProxySettings.fromSharedPreferences(preferences);
-        if (preferences.getBoolean("proxy_enabled", false) && proxySettings.isValid()) {
+        if (!BuildVars.MESSENGER_API_ENABLED && preferences.getBoolean("proxy_enabled", false) && proxySettings.isValid()) {
             if (proxySettings.getType() == ProxySettings.Type.WEB) {
                 int localPort = WebProxyTransport.start(proxySettings.getAddress(), proxySettings.getSecret());
                 native_setProxySettings(currentAccount, "127.0.0.1", localPort != 0 ? localPort : 9, "", "",
@@ -688,7 +754,7 @@ public class ConnectionsManager extends BaseController {
             packageId = "";
         }
 
-        native_init(currentAccount, version, layer, apiId, deviceModel, systemVersion, appVersion, langCode, systemLangCode, configPath, logPath, regId, cFingerprint, installer, packageId, timezoneOffset, userId, userPremium, enablePushConnection, ApplicationLoader.isNetworkOnline(), ApplicationLoader.getCurrentNetworkType(), SharedConfig.measureDevicePerformanceClass());
+        native_init(currentAccount, version, layer, apiId, deviceModel, systemVersion, appVersion, langCode, systemLangCode, configPath, logPath, regId, cFingerprint, installer, packageId, timezoneOffset, userId, userPremium, enablePushConnection && !BuildVars.MESSENGER_API_ENABLED, !BuildVars.MESSENGER_API_ENABLED && ApplicationLoader.isNetworkOnline(), ApplicationLoader.getCurrentNetworkType(), SharedConfig.measureDevicePerformanceClass());
         checkConnection();
     }
 
@@ -700,6 +766,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void setRegId(String regId, @PushListenerController.PushType int type, String status) {
+        if (BuildVars.MESSENGER_API_ENABLED) return;
         String pushString = regId;
         if (!TextUtils.isEmpty(pushString) && type == PushListenerController.PUSH_TYPE_HUAWEI) {
             pushString = "huawei://" + pushString;
@@ -724,25 +791,26 @@ public class ConnectionsManager extends BaseController {
     }
 
     public void switchBackend(boolean restart) {
+        if (BuildVars.MESSENGER_API_ENABLED) return;
         SharedPreferences preferences = MessagesController.getGlobalMainSettings();
         preferences.edit().remove("language_showed2").commit();
         native_switchBackend(currentAccount, restart);
     }
 
     public boolean isTestBackend() {
-        return native_isTestBackend(currentAccount) != 0;
+        return !BuildVars.MESSENGER_API_ENABLED && native_isTestBackend(currentAccount) != 0;
     }
 
     public void resumeNetworkMaybe() {
-        native_resumeNetwork(currentAccount, true);
+        if (!BuildVars.MESSENGER_API_ENABLED) native_resumeNetwork(currentAccount, true);
     }
 
     public void updateDcSettings() {
-        native_updateDcSettings(currentAccount);
+        if (!BuildVars.MESSENGER_API_ENABLED) native_updateDcSettings(currentAccount);
     }
 
     public void setDefaultDatacenterId(int dcId) {
-        native_moveDatacenter(currentAccount, dcId);
+        if (!BuildVars.MESSENGER_API_ENABLED) native_moveDatacenter(currentAccount, dcId);
     }
 
     public long getPauseTime() {
@@ -750,7 +818,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public long checkProxy(ProxySettings settings, RequestTimeDelegate requestTimeDelegate) {
-        if (settings == null || !settings.isValid()) {
+        if (BuildVars.MESSENGER_API_ENABLED || settings == null || !settings.isValid()) {
             return 0;
         }
         if (settings.getType() == ProxySettings.Type.WEB) {
@@ -782,6 +850,14 @@ public class ConnectionsManager extends BaseController {
             if (appResumeCount < 0) {
                 appResumeCount = 0;
             }
+        }
+        if (BuildVars.MESSENGER_API_ENABLED) {
+            if (appResumeCount == 0) {
+                if (lastPauseTime == 0) lastPauseTime = System.currentTimeMillis();
+            } else {
+                lastPauseTime = 0;
+            }
+            return;
         }
         if (appResumeCount == 0) {
             if (lastPauseTime == 0) {
@@ -837,6 +913,7 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void onConnectionStateChanged(final int state, final int currentAccount) {
+        if (BuildVars.MESSENGER_API_ENABLED) return;
         AndroidUtilities.runOnUIThread(() -> {
             getInstance(currentAccount).connectionState = state;
             AccountInstance.getInstance(currentAccount).getNotificationCenter().postNotificationName(NotificationCenter.didUpdateConnectionState);
@@ -959,6 +1036,10 @@ public class ConnectionsManager extends BaseController {
     }
 
     public static void setProxySettings(boolean enabled, ProxySettings settings) {
+        if (BuildVars.MESSENGER_API_ENABLED) {
+            WebProxyTransport.stop();
+            return;
+        }
         String address = "";
         int port = 0;
         String username = "";

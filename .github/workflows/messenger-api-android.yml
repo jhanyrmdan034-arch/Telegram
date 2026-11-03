@@ -1,0 +1,176 @@
+name: Messenger API Android integration
+
+on:
+  push:
+    branches: ['arena/42f78b0d-telegram']
+    paths:
+      - 'TMessagesProj/**'
+      - 'TMessagesProj_App/**'
+      - 'backend/messenger-api/**'
+      - '.github/workflows/messenger-api-android.yml'
+  pull_request:
+    paths:
+      - 'TMessagesProj/**'
+      - 'TMessagesProj_App/**'
+      - 'backend/messenger-api/**'
+      - '.github/workflows/messenger-api-android.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    name: Backend API integration tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test REST, SSE, auth and SQLite persistence
+        working-directory: backend/messenger-api
+        run: npm test
+
+  android-emulator-smoke:
+    name: Build and test on Android emulator
+    needs: backend-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      MESSENGER_API_ENABLED: 'true'
+      MESSENGER_API_BASE_URL: 'http://10.0.2.2:8080'
+      MESSENGER_HOST: '0.0.0.0'
+      MESSENGER_PORT: '8080'
+      MESSENGER_DB_PATH: '${{ github.workspace }}/.data/ci-messenger.sqlite'
+      MESSENGER_ALLOW_REMOTE: '1'
+    steps:
+      - name: Free disk space and configure swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/share/powershell /opt/az 2>/dev/null || true
+          sudo docker image prune -af 2>/dev/null || true
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          df -h
+          free -h
+
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Initialize native submodules
+        run: |
+          git config --global protocol.version 2
+          git submodule update --init --recursive --depth=1 --jobs=8
+          git submodule status | head -40
+          df -h
+
+      - name: Set up Node.js for the local API
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK, NDK, CMake and emulator image
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" \
+            'platforms;android-36' \
+            'build-tools;36.0.0' \
+            'ndk;27.2.12479018' \
+            'cmake;3.22.1' \
+            'platform-tools' \
+            'emulator' \
+            'system-images;android-35;google_apis;x86_64'
+          df -h
+
+      - name: Limit emulator builds to x86_64 and modern phone ABIs
+        run: |
+          for file in TMessagesProj_App/build.gradle TMessagesProj_AppTests/build.gradle; do
+            sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a", "x86_64"/g' "$file"
+            grep -n 'abiFilters' "$file"
+          done
+
+      - name: Build debug APK
+        run: |
+          ./gradlew --no-daemon :TMessagesProj_App:assembleAfatDebug \
+            -PMESSENGER_API_ENABLED=true \
+            -PMESSENGER_API_BASE_URL=http://10.0.2.2:8080
+
+      - name: Start local API for emulator
+        working-directory: backend/messenger-api
+        run: |
+          mkdir -p "$(dirname "$MESSENGER_DB_PATH")"
+          npm run seed:demo
+          nohup npm start > "$RUNNER_TEMP/messenger-api.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/messenger-api.pid"
+          for attempt in $(seq 1 60); do
+            if curl --silent --fail http://127.0.0.1:8080/health; then
+              echo
+              exit 0
+            fi
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/messenger-api.log"
+          exit 1
+
+      - name: Install and launch on Android emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: '-no-window -no-audio -no-boot-anim -camera-back none'
+          disable-animations: true
+          script: |
+            adb install -r TMessagesProj_App/build/outputs/apk/afat/debug/app.apk
+            ./gradlew --no-daemon :TMessagesProj_AppTests:connectedAfatDebugAndroidTest \
+              -Pandroid.testInstrumentationRunnerArguments.class=org.telegram.messenger.MessengerApiClientIntegrationTest \
+              -PMESSENGER_API_ENABLED=true \
+              -PMESSENGER_API_BASE_URL=http://10.0.2.2:8080
+            adb shell monkey -p org.telegram.messenger.beta 1
+            sleep 15
+            adb shell pidof org.telegram.messenger.beta
+            if adb logcat -d -t 3000 | grep -Eq 'FATAL EXCEPTION|Unable to start activity'; then
+              adb logcat -d -t 3000 | grep -E 'FATAL EXCEPTION|Unable to start activity' || true
+              exit 1
+            fi
+
+      - name: Upload emulator test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: messenger-api-emulator-reports
+          path: |
+            TMessagesProj_AppTests/build/outputs/androidTest-results/connected/**
+            TMessagesProj_AppTests/build/reports/androidTests/connected/**
+          if-no-files-found: ignore
+
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: messenger-api-android-debug
+          path: TMessagesProj_App/build/outputs/apk/afat/debug/app.apk
+          if-no-files-found: error

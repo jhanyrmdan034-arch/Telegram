@@ -134,6 +134,7 @@ import org.telegram.messenger.ImageLocation;
 import org.telegram.messenger.LocaleController;
 import org.telegram.messenger.MediaDataController;
 import org.telegram.messenger.MessageObject;
+import org.telegram.messenger.MessengerApiClient;
 import org.telegram.messenger.MessagesController;
 import org.telegram.messenger.MessagesStorage;
 import org.telegram.messenger.NotificationCenter;
@@ -1629,8 +1630,10 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
                 }
 
                 NotificationCenter.getInstance(currentAccount).postNotificationName(NotificationCenter.mainUserInfoChanged);
-                LocaleController.getInstance().loadRemoteLanguages(currentAccount);
-                RestrictedLanguagesSelectActivity.checkRestrictedLanguages(true);
+                if (!BuildVars.MESSENGER_API_ENABLED) {
+                    LocaleController.getInstance().loadRemoteLanguages(currentAccount);
+                    RestrictedLanguagesSelectActivity.checkRestrictedLanguages(true);
+                }
             }
         } else if (getParentActivity() instanceof ExternalActionActivity) {
             ((ExternalActionActivity) getParentActivity()).onFinishLogin();
@@ -1662,12 +1665,16 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         users.add(res.user);
         MessagesStorage.getInstance(currentAccount).putUsersAndChats(users, null, true, true);
         MessagesController.getInstance(currentAccount).putUser(res.user, false);
-        ContactsController.getInstance(currentAccount).checkAppAccount();
-        MessagesController.getInstance(currentAccount).checkPromoInfo(true);
-        ConnectionsManager.getInstance(currentAccount).updateDcSettings();
-        MessagesController.getInstance(currentAccount).loadAppConfig();
-        MessagesController.getInstance(currentAccount).loadWebBrowserConfig();
-        MessagesController.getInstance(currentAccount).checkPeerColors(false);
+        if (BuildVars.MESSENGER_API_ENABLED) {
+            MessengerApiClient.getInstance(currentAccount).onAuthenticated(res.user.id);
+        } else {
+            ContactsController.getInstance(currentAccount).checkAppAccount();
+            MessagesController.getInstance(currentAccount).checkPromoInfo(true);
+            ConnectionsManager.getInstance(currentAccount).updateDcSettings();
+            MessagesController.getInstance(currentAccount).loadAppConfig();
+            MessagesController.getInstance(currentAccount).loadWebBrowserConfig();
+            MessagesController.getInstance(currentAccount).checkPeerColors(false);
+        }
 
         if (res.future_auth_token != null) {
             AuthTokensHelper.saveLogInToken(res);
@@ -1678,7 +1685,9 @@ public class LoginActivity extends BaseFragment implements NotificationCenter.No
         if (afterSignup) {
             MessagesController.getInstance(currentAccount).putDialogsEndReachedAfterRegistration();
         }
-        MediaDataController.getInstance(currentAccount).loadStickersByEmojiOrName(AndroidUtilities.STICKERS_PLACEHOLDER_PACK_NAME, false, true);
+        if (!BuildVars.MESSENGER_API_ENABLED) {
+            MediaDataController.getInstance(currentAccount).loadStickersByEmojiOrName(AndroidUtilities.STICKERS_PLACEHOLDER_PACK_NAME, false, true);
+        }
 
         needFinishActivity(afterSignup, res.setup_password_required, res.otherwise_relogin_days);
     }
