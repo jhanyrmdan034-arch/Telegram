@@ -107,7 +107,32 @@ jobs:
           grep -rh 'name="AppName"' TMessagesProj/src/main/res/ | sort -u
 
       - name: Build release APK
-        run: ./gradlew :TMessagesProj_App:assembleAfatRelease --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :TMessagesProj_App:assembleAfatRelease --stacktrace 2>&1 | tee build.log
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          python3 - <<'PYEOF'
+          import re
+          try:
+              log = open('build.log', errors='replace').read()
+          except FileNotFoundError:
+              print('::error::build.log not found')
+              raise SystemExit
+          def emit(msg):
+              msg = msg.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print('::error::' + msg[:6000])
+          m = re.search(r'\* What went wrong:(.*?)(?=\n\* Try:|\Z)', log, re.S)
+          if m:
+              emit('GRADLE FAILURE:' + m.group(1)[:6000])
+          failed = [l for l in log.splitlines() if 'FAILED' in l or l.startswith('e: ')]
+          if failed:
+              emit('FAILED LINES:\n' + '\n'.join(failed[:40]))
+          tail = '\n'.join(log.splitlines()[-60:])
+          emit('LOG TAIL:\n' + tail)
+          PYEOF
 
       - name: Collect APK
         run: |
