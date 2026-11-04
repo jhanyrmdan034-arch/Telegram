@@ -126,3 +126,4 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 cd platform/deploy && cp .env.example .env   # مقادیر CHANGE_ME را پر کنید
 docker compose up -d --build
 ```
+| فاز ۴ — گفتگو (ChatActivity) | **پیاده‌سازی‌شده در کد؛ اعتبارسنجی APK باقی مانده (تأیید نشده)** | تاریخچه صفحه‌بندی‌شده، ارسال متن، پاسخ، حذف، همگام‌سازی پس از اتصال مجدد، ضدتکرار؛ ویرایش/typing/جست‌وجو آماده ولی وصل‌نشده؛ ۱۴۱ تست |
