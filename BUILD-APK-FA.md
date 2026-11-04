@@ -35,6 +35,30 @@ Android Studio → open project (`TMessagesProj`) → `Build > Generate Signed B
 - با دو گوشی (یا یک گوشی + تست‌کلاینت `server/test_client.py`) تست کن:
   پیام متنی، ارسال عکس، باز شدن تاریخچه، push زنده.
 
-## ۷. FD — ordem deploy
-`nokta`: `server/package_deploy.sh` → tar.gz را روی VPS ایران آپلود کن، با systemd یا
-`nohup` اجرا کن، `--public-host` را IP/دامنه‌ی سرور بگذار.語 status روی پورت 8080.
+## ۷. ساخت APK با GitHub Actions (بدون نیاز به Android Studio روی سیستم شما)
+
+workflow آماده است: `.github/workflows/build-apk.yml` (روی برنچ `arena/b6bc4d23-telegram`).
+
+**اجرا (۲ کلیک):**
+1. GitHub → تب **Actions** → workflow **«Build custom-backend APK»** → **Run workflow**
+2. Branch را `arena/b6bc4d23-telegram` انتخاب کن، `backend_host` = IP/دامنه‌ی سرور ایران (یا `127.0.0.1` برای تست لوکال)، `backend_port` = `8443` → **Run**
+
+نکته: آدرس بک‌اندJQ از فایل `server/deploy-host.txt` هم خوانده می‌شود — برای rebuild با IP جدید،
+آن فایل را edit کن و push کن (push هم workflow را trigger می‌کند).
+
+**خروجی build** (هر ۳ به‌صورت خودکار):
+- Actions **artifact** به اسم `app-afat-release-apk`
+- یک **GitHub Release** (pre-release با تگ `apk-custom-<sha>`) با فایل APK
+- commit خودکار APK در مسیر **`releases/app-afat-release.apk`** همین برنچ (قابل دانلود با git)
+
+## ۸. deploy سرور
+`server/package_deploy.sh` → tar.gz را روی VPS ایران آپلود کن، با systemd یا
+`nohup` اجرا کن — با این دستور (کلید dev تا وقتی تست است):
+
+```bash
+python3 -m mtserver.main --listen-host 0.0.0.0 --listen-port 8443 \
+  --public-host <IP-یا-دامنه-سرور> --public-port 8443 \
+  --dev-code 12345 --key server/dev_server_key.pem --http-status-port 8080
+```
+
+⚠️ سرور **باید با همان کلید** `server/dev_server_key.pem` اجرا شود که APK با آن build شده.

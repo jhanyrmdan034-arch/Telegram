@@ -105,13 +105,26 @@ jobs:
           path: TMessagesProj_App/build/outputs/apk/afat/release/app.apk
           retention-days: 7
 
-      - name: Commit APK into releases/ (fetchable via plain git)
+      - name: Stage APK into releases/
         run: |
           APK=TMessagesProj_App/build/outputs/apk/afat/release/app.apk
           mkdir -p releases
           cp "$APK" releases/app-afat-release.apk
           echo "backend_host=${{ steps.backend.outputs.host }}" > releases/BACKEND.txt
           echo "backend_port=${{ steps.backend.outputs.port }}" >> releases/BACKEND.txt
+          ls -lh releases/
+
+      - name: Publish GitHub Release with the APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-custom-${{ github.sha }}
+          prerelease: true
+          files: |
+            releases/app-afat-release.apk
+            releases/BACKEND.txt
+
+      - name: Commit APK into releases/ (fetchable via plain git)
+        run: |
           git config user.email "actions@github.com"
           git config user.name "github-actions"
           git add releases/ TMessagesProj/jni/tgnet/CustomBackendConfig.h
