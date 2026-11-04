@@ -7,9 +7,11 @@ Then patch the Android app to point at it (see docs/CUSTOM_BACKEND.md).
 """
 import argparse
 import asyncio
+import json
 import os
 import struct
 import sys
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -109,6 +111,8 @@ async def amain():
     ap.add_argument("--dc-id", type=int, default=1)
     ap.add_argument("--dev-code", default=None, help="fixed SMS code accepted by auth.signIn (dev mode)")
     ap.add_argument("--db", default=None)
+    ap.add_argument("--http-status-port", type=int, default=0,
+                    help="if set, serve a JSON status page on 0.0.0.0:<port> (for monitoring/preview)")
     args = ap.parse_args()
 
     config = ServerConfig(listen_host=args.listen_host, listen_port=args.listen_port,
@@ -116,6 +120,34 @@ async def amain():
                           public_port=args.public_port or args.listen_port,
                           dc_id=args.dc_id, dev_code=args.dev_code, db_path=args.db)
     server = Server(config)
+
+    if args.http_status_port:
+        start_time = time.time()
+
+        async def status_handler(reader, writer):
+            try:
+                await reader.read(65536)
+                body = json.dumps({
+                    "status": "ok",
+                    "service": "custom MTProto backend (mtserver)",
+                    "dc_id": config.dc_id,
+                    "mtproto_listen": "%s:%d" % (args.listen_host, args.listen_port),
+                    "advertised_endpoint": "%s:%d" % (config.public_host, config.public_port),
+                    "rsa_fingerprint": "0x%016x" % (config.fingerprint & 0xFFFFFFFFFFFFFFFF),
+                    "dev_code": config.dev_code,
+                    "uptime_s": int(time.time() - start_time),
+                    "stats": server.db.stats(),
+                }, indent=2).encode()
+                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: application/json; charset=utf-8\r\n"
+                             b"Content-Length: " + str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
+                await writer.drain()
+            except Exception:
+                pass
+            finally:
+                writer.close()
+
+        await asyncio.start_server(status_handler, "0.0.0.0", args.http_status_port)
+        print("[server] HTTP status page on 0.0.0.0:%d" % args.http_status_port, flush=True)
 
     print("=" * 70, flush=True)
     print("[server] custom MTProto backend listening on %s:%d" % (args.listen_host, args.listen_port), flush=True)

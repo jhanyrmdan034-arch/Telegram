@@ -236,6 +236,41 @@ async def scenario(host, port, code):
     print("[A] getHistory: %d message(s): %r" % (len(hist.messages), [m.message for m in hist.messages]))
     assert any(m.message == "salam az server-e ma! 🚀" for m in hist.messages)
 
+    # --- photo: upload in parts -> sendMedia -> push -> history -> download ---
+    photo_bytes = b"\xff\xd8\xff" + os.urandom(200000) + b"\xff\xd9"  # fake JPEG, ~200 KB
+    file_id = int.from_bytes(os.urandom(8), "little", signed=True)
+    part_size = 1024 * 1024
+    parts = [photo_bytes[i:i + part_size] for i in range(0, len(photo_bytes), part_size)]
+    for idx, p in enumerate(parts):
+        await a.rpc(F.upload.SaveFilePartRequest(file_id=file_id, file_part=idx, bytes=p))
+    print("[A] upload.saveFilePart x%d (%d bytes uploaded)" % (len(parts), len(photo_bytes)))
+    media = T.InputMediaUploadedPhoto(file=T.InputFile(id=file_id, parts=len(parts), name="photo.jpg", md5_checksum=""))
+    ups2 = await a.rpc(F.messages.SendMediaRequest(peer=peer_user(b_id), media=media, message="ax! 📷", random_id=999))
+    print("[A] messages.sendMedia(photo) -> %d update(s)" % len(ups2.updates))
+    push2 = await b.wait_push(lambda o: isinstance(o, T.Updates) and any(
+        isinstance(u, T.UpdateNewMessage) and getattr(u.message, "media", None) is not None for u in o.updates))
+    m2 = [u for u in push2.updates if isinstance(u, T.UpdateNewMessage)][0].message
+    photo = m2.media.photo
+    print("[B] push photo received: caption=%r size=%d dc=%d" % (m2.message, photo.sizes[0].size, photo.dc_id))
+    assert photo.sizes[0].size == len(photo_bytes)
+    got = b""
+    off = 0
+    while True:
+        chunk = await b.rpc(F.upload.GetFileRequest(
+            location=T.InputPhotoFileLocation(id=photo.id, access_hash=photo.access_hash,
+                                              file_reference=photo.file_reference, thumb_size="x"),
+            offset=off, limit=1024 * 1024))
+        got += chunk.bytes
+        if len(chunk.bytes) < 1024 * 1024:
+            break
+        off += len(chunk.bytes)
+    print("[B] upload.getFile: downloaded %d bytes, content match=%s" % (len(got), got == photo_bytes))
+    assert got == photo_bytes
+    hist2 = await a.rpc(F.messages.GetHistoryRequest(peer=peer_user(b_id), offset_id=0, offset_date=None,
+                                                      add_offset=0, limit=20, max_id=0, min_id=0, hash=0))
+    assert any(getattr(m, "media", None) is not None for m in hist2.messages)
+    print("[A] getHistory contains the photo message ✓")
+
     # A lists dialogs
     dlgs = await a.rpc(F.messages.GetDialogsRequest(offset_date=None, offset_id=0, offset_peer=T.InputPeerEmpty(), limit=20, hash=0))
     print("[A] getDialogs: %d dialog(s)" % len(dlgs.dialogs))

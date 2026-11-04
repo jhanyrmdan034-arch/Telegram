@@ -53,6 +53,19 @@ class Database:
                 UNIQUE (dialog, msg_id)
             );
             CREATE INDEX IF NOT EXISTS idx_messages_dialog ON messages(dialog, msg_id);
+            CREATE TABLE IF NOT EXISTS files (
+                file_id TEXT PRIMARY KEY,
+                name TEXT DEFAULT '',
+                path TEXT NOT NULL,
+                size INTEGER DEFAULT 0,
+                parts INTEGER DEFAULT 0,
+                received INTEGER DEFAULT 0,
+                volume_id INTEGER DEFAULT 0,
+                local_id INTEGER DEFAULT 0,
+                secret INTEGER DEFAULT 0,
+                done INTEGER DEFAULT 0,
+                created_at INTEGER NOT NULL
+            );
             """)
             self.conn.commit()
 
@@ -137,3 +150,90 @@ class Database:
                 GROUP BY dialog ORDER BY top DESC
             """, (str(uid), str(uid), str(uid))).fetchall()
             return [dict(r) for r in rows]
+
+    # ------------------------------------------------------------- files ----
+    def create_file(self, file_id: str, files_dir: str, parts: int = 0):
+        os.makedirs(files_dir, exist_ok=True)
+        path = os.path.join(files_dir, file_id + ".part")
+        with self.lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO files (file_id, path, parts, received, done, created_at) VALUES (?,?,0,0,0,?)",
+                (file_id, path, int(time.time())))
+            self.conn.commit()
+
+    def append_file_part(self, file_id: str, data: bytes):
+        """Append one upload part; returns (done, row)."""
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM files WHERE file_id = ?", (file_id,)).fetchone()
+            if row is None:
+                return False, None
+            row = dict(row)
+            with open(row["path"], "ab") as f:
+                f.write(data)
+            received = row["received"] + 1
+            size = row["size"] + len(data)
+            done = 0
+            volume_id, local_id, secret = row["volume_id"], row["local_id"], row["secret"]
+            if row["parts"] and received >= row["parts"]:
+                done = 1
+                volume_id = int.from_bytes(os.urandom(8), "big", signed=True)
+                local_id = int.from_bytes(os.urandom(4), "big", signed=True)
+                secret = int.from_bytes(os.urandom(8), "big", signed=True)
+            self.conn.execute(
+                "UPDATE files SET received=?, size=?, done=?, volume_id=?, local_id=?, secret=? WHERE file_id=?",
+                (received, size, done, volume_id, local_id, secret, file_id))
+            self.conn.commit()
+            row.update(received=received, size=size, done=done,
+                       volume_id=volume_id, local_id=local_id, secret=secret)
+            return bool(done), row
+
+    def set_file_parts(self, file_id: str, parts: int, name: str = ""):
+        with self.lock:
+            self.conn.execute("UPDATE files SET parts=?, name=COALESCE(NULLIF(?, ''), name) WHERE file_id=?",
+                              (parts, name, file_id))
+            self.conn.commit()
+
+    def finalize_file(self, file_id: str):
+        """Mark an upload done once all parts arrived; assign download location."""
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM files WHERE file_id = ?", (file_id,)).fetchone()
+            if row is None or row["done"] or not row["parts"] or row["received"] < row["parts"]:
+                return False
+            volume_id = int.from_bytes(os.urandom(8), "big", signed=True)
+            local_id = int.from_bytes(os.urandom(4), "big", signed=True)
+            secret = int.from_bytes(os.urandom(8), "big", signed=True)
+            self.conn.execute(
+                "UPDATE files SET done=1, volume_id=?, local_id=?, secret=? WHERE file_id=?",
+                (volume_id, local_id, secret, file_id))
+            self.conn.commit()
+            return True
+
+    def get_file(self, file_id: str):
+        with self.lock:
+            row = self.conn.execute("SELECT * FROM files WHERE file_id = ?", (file_id,)).fetchone()
+            return dict(row) if row else None
+
+    def file_by_location(self, volume_id: int, local_id: int, secret: int):
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM files WHERE volume_id=? AND local_id=? AND secret=?",
+                (volume_id, local_id, secret)).fetchone()
+            return dict(row) if row else None
+
+    def file_by_photo_id(self, photo_id: int):
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM files WHERE (CAST(file_id AS INTEGER) & 9223372036854775807) = ?",
+                (photo_id,)).fetchone()
+            return dict(row) if row else None
+
+    def stats(self) -> dict:
+        with self.lock:
+            c = self.conn.cursor()
+            return {
+                "users": c.execute("SELECT COUNT(*) FROM users").fetchone()[0],
+                "messages": c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
+                "chats": c.execute("SELECT COUNT(*) FROM chats").fetchone()[0],
+                "files": c.execute("SELECT COUNT(*) FROM files WHERE done=1").fetchone()[0],
+                "file_bytes": c.execute("SELECT COALESCE(SUM(size),0) FROM files WHERE done=1").fetchone()[0],
+            }

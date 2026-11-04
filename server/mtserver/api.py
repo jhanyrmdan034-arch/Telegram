@@ -4,6 +4,7 @@ Each handler: async def handler(ctx, request) -> TLObject (the rpc_result body).
 `ctx` is the Session; `ctx.server` is the Server (config/db/sessions).
 """
 import hashlib
+import json
 import os
 import time
 from datetime import datetime, timezone
@@ -13,6 +14,8 @@ from telethon.tl import functions as F
 from telethon.tl.types import messages as TM
 from telethon.tl.types import auth as TA
 from telethon.tl.types import updates as TU
+from telethon.tl.types import upload as TUP
+from telethon.tl.types import storage as TSTG
 from telethon.tl.types import RpcError
 
 HANDLERS = {}
@@ -80,6 +83,23 @@ def user_obj(server, uid: int, self_id=None) -> T.User:
     )
 
 
+def photo_id_of(file_id: str) -> int:
+    return int(file_id) & 0x7FFFFFFFFFFFFFFF
+
+
+def photo_media_obj(server, file_id: str):
+    """Build MessageMediaPhoto for an uploaded file.
+    Download path (layer 232): upload.getFile with InputPhotoFileLocation(photo.id, access_hash, ...)."""
+    frow = server.db.get_file(file_id)
+    if frow is None:
+        return None
+    photo = T.Photo(id=photo_id_of(file_id), access_hash=frow["secret"],
+                    file_reference=b"", date=now(),
+                    sizes=[T.PhotoSize(type="x", w=0, h=0, size=frow["size"])],
+                    dc_id=server.config.dc_id)
+    return T.MessageMediaPhoto(photo=photo, ttl_seconds=None)
+
+
 def message_obj(server, row: dict, viewer: int) -> T.Message:
     dialog = row["dialog"]
     if dialog.startswith("d"):
@@ -93,12 +113,20 @@ def message_obj(server, row: dict, viewer: int) -> T.Message:
     else:
         pid = int(dialog[2:])
         peer = T.PeerChannel(channel_id=pid)
-    return T.Message(
+    kwargs = dict(
         id=row["msg_id"], peer_id=peer,
         date=datetime.fromtimestamp(row["date"], timezone.utc),
         message=row["text"], out=(row["from_id"] == viewer),
         from_id=T.PeerUser(user_id=row["from_id"]),
     )
+    media_json = row.get("media") if isinstance(row, dict) else None
+    if media_json:
+        mj = json.loads(media_json)
+        if mj.get("type") == "photo":
+            media = photo_media_obj(server, mj["file_id"])
+            if media is not None:
+                kwargs["media"] = media
+    return T.Message(**kwargs)
 
 
 def recipients_of(server, me: int, kind: str, pid: int):
@@ -174,28 +202,25 @@ async def get_state(ctx, req):
     return TU.State(pts=ctx.server.pts, qts=0, date=now(), seq=0, unread_count=0)
 
 
-@handler(F.messages.SendMessageRequest)
-async def send_message(ctx, req):
+async def _post_message(ctx, kind, pid, text, media_json, random_id):
+    """Shared delivery logic for sendMessage / sendMedia."""
     server = ctx.server
     me = ctx.user_id
-    kind, pid = peer_of_input(req.peer)
     if kind == "user" and pid is None:
         pid = me
     dialog = dialog_key(me, kind, pid)
     mid = server.db.next_msg_id(dialog)
     date = int(time.time())
-    server.db.add_message(dialog, mid, me, date, req.message, req.random_id or 0)
+    server.db.add_message(dialog, mid, me, date, text, random_id or 0, media_json)
     pts = server.bump_pts()
 
     def make_updates(viewer):
-        row = dict(dialog=dialog, msg_id=mid, from_id=me, date=date, text=req.message)
+        row = dict(dialog=dialog, msg_id=mid, from_id=me, date=date, text=text, media=media_json)
         msg = message_obj(server, row, viewer)
         users = [user_obj(server, me), user_obj(server, pid)] if kind == "user" else [user_obj(server, me)]
         return T.Updates(updates=[T.UpdateNewMessage(message=msg, pts=pts, pts_count=1)],
                          users=users, chats=[], date=now(), seq=0)
 
-    # deliver to other sessions of the recipients (and the sender's other devices)
-    targets = set(recipients_of(server, me, kind, pid)) | ({me} - {me} if False else set())
     for uid in recipients_of(server, me, kind, pid):
         for s in server.sessions_of(uid):
             if s is not ctx:
@@ -204,6 +229,62 @@ async def send_message(ctx, req):
                 except Exception as e:
                     print("[server] push failed: %s" % e, flush=True)
     return make_updates(me)
+
+
+@handler(F.messages.SendMessageRequest)
+async def send_message(ctx, req):
+    kind, pid = peer_of_input(req.peer)
+    return await _post_message(ctx, kind, pid, req.message, "", req.random_id)
+
+
+@handler(F.messages.SendMediaRequest)
+async def send_media(ctx, req):
+    """Photo flow: client first uploads the file (upload.saveFilePart*), then sends
+    messages.sendMedia with InputMediaUploadedPhoto referencing the file id."""
+    server = ctx.server
+    kind, pid = peer_of_input(req.peer)
+    m = req.media
+    if isinstance(m, T.InputMediaUploadedPhoto):
+        f = m.file  # T.InputFile: id, parts, name, md5_checksum
+        fid = str(f.id)
+        if server.db.get_file(fid) is None:
+            return RpcError(error_code=400, error_message="FILE_NOT_UPLOADED")
+        server.db.set_file_parts(fid, f.parts, getattr(f, "name", "") or "")
+        server.db.finalize_file(fid)
+        row = server.db.get_file(fid)
+        if not row["done"]:
+            return RpcError(error_code=400, error_message="FILE_UPLOAD_INCOMPLETE")
+        media_json = json.dumps({"type": "photo", "file_id": fid})
+        return await _post_message(ctx, kind, pid, req.message or "", media_json, req.random_id)
+    return RpcError(error_code=400, error_message="MEDIA_TYPE_NOT_SUPPORTED")
+
+
+# ------------------------------------------------------------- uploads -----
+@handler(F.upload.SaveFilePartRequest, F.upload.SaveBigFilePartRequest)
+async def save_file_part(ctx, req):
+    fid = str(req.file_id)
+    db = ctx.server.db
+    if req.file_part == 0 and db.get_file(fid) is None:
+        db.create_file(fid, ctx.server.config.files_dir)
+    done, row = db.append_file_part(fid, req.bytes)
+    if done:
+        print("[server] file %s upload complete: %d bytes" % (fid, row["size"]), flush=True)
+    return b"\xb5\x75\x72\x99"  # boolTrue ctor 0x997275b5 (telethon has no BoolTrue class)
+
+
+@handler(F.upload.GetFileRequest)
+async def get_file(ctx, req):
+    loc = req.location
+    if isinstance(loc, T.InputPhotoFileLocation):
+        row = ctx.server.db.file_by_photo_id(loc.id)
+    else:  # T.InputFileLocation: volume_id, local_id, secret
+        row = ctx.server.db.file_by_location(loc.volume_id, loc.local_id, loc.secret)
+    if row is None or not row["done"]:
+        return RpcError(error_code=400, error_message="FILE_NOT_FOUND")
+    with open(row["path"], "rb") as f:
+        f.seek(req.offset)
+        data = f.read(req.limit)
+    return TUP.File(type=TSTG.FilePartial(), bytes=data, mtime=int(row["created_at"]))
 
 
 @handler(F.messages.GetHistoryRequest)

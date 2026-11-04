@@ -26,6 +26,8 @@ class ServerConfig:
         # if set, this SMS code is always accepted (development mode)
         self.dev_code = dev_code
         self.db_path = db_path or os.path.join(BASE_DIR, "mtserver.db")
+        self.files_dir = os.path.join(BASE_DIR, "files")
+        os.makedirs(self.files_dir, exist_ok=True)
 
         if os.path.exists(KEY_FILE):
             with open(KEY_FILE, "rb") as f:
