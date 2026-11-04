@@ -16,7 +16,7 @@ KEY_FILE = os.path.join(BASE_DIR, "server_key.pem")
 class ServerConfig:
     def __init__(self, listen_host="0.0.0.0", listen_port=443,
                  public_host="127.0.0.1", public_port=443,
-                 dc_id=1, dev_code=None, db_path=None):
+                 dc_id=1, dev_code=None, db_path=None, key_file=None):
         self.listen_host = listen_host
         self.listen_port = listen_port
         # what clients are told to dial (goes into help.getConfig dcOption)
@@ -29,8 +29,9 @@ class ServerConfig:
         self.files_dir = os.path.join(BASE_DIR, "files")
         os.makedirs(self.files_dir, exist_ok=True)
 
-        if os.path.exists(KEY_FILE):
-            with open(KEY_FILE, "rb") as f:
+        key_path = key_file or KEY_FILE
+        if os.path.exists(key_path):
+            with open(key_path, "rb") as f:
                 self.rsa = RSAKey.load(f.read())
         else:
             self.rsa = RSAKey()

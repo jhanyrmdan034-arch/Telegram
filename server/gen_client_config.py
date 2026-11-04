@@ -20,11 +20,12 @@ def main():
     ap.add_argument("--public-host", required=True, help="IP or domain clients dial (your VPS)")
     ap.add_argument("--public-port", type=int, default=8443)
     ap.add_argument("--dc-id", type=int, default=1)
+    ap.add_argument("--key", default=None, help="server RSA private key PEM (default: server/server_key.pem)")
     args = ap.parse_args()
 
     # load existing key (do NOT regenerate); db path unused here
     cfg = ServerConfig(public_host=args.public_host, public_port=args.public_port,
-                       dc_id=args.dc_id, db_path=":memory:")
+                       dc_id=args.dc_id, db_path=":memory:", key_file=args.key)
     snippet = cfg.client_header_snippet()
     print(snippet)
     print("// --- paste the block ABOVE into TMessagesProj/jni/tgnet/CustomBackendConfig.h ---",

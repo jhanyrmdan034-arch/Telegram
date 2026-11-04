@@ -111,6 +111,9 @@ async def amain():
     ap.add_argument("--dc-id", type=int, default=1)
     ap.add_argument("--dev-code", default=None, help="fixed SMS code accepted by auth.signIn (dev mode)")
     ap.add_argument("--db", default=None)
+    ap.add_argument("--key", default=None,
+                    help="RSA private key PEM to use (default: server_key.pem, generated on first run). "
+                         "Use the SAME key the APK was built with, e.g. --key server/dev_server_key.pem")
     ap.add_argument("--http-status-port", type=int, default=0,
                     help="if set, serve a JSON status page on 0.0.0.0:<port> (for monitoring/preview)")
     args = ap.parse_args()
@@ -118,7 +121,8 @@ async def amain():
     config = ServerConfig(listen_host=args.listen_host, listen_port=args.listen_port,
                           public_host=args.public_host,
                           public_port=args.public_port or args.listen_port,
-                          dc_id=args.dc_id, dev_code=args.dev_code, db_path=args.db)
+                          dc_id=args.dc_id, dev_code=args.dev_code, db_path=args.db,
+                          key_file=args.key)
     server = Server(config)
 
     if args.http_status_port:
