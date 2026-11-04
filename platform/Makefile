@@ -5,7 +5,8 @@ PIP    = $(VENV)/bin/pip
 PY     = $(VENV)/bin/python
 
 .PHONY: help venv test test-security load lint openapi run migrate seed superuser \
-        up down logs backup restore deploy android-check android-probe android-login-probe
+        up down logs backup restore deploy android-check android-probe android-login-probe \
+        android-demo-probe
 
 help:
 	@echo "make venv        install backend dependencies into ../../.venv"
@@ -21,6 +22,7 @@ help:
 	@echo "make android-check  static check of the Android platform client"
 	@echo "make android-probe  replay the Android client contract against :8000"
 	@echo "make android-login-probe  replay the LoginActivity -> backend auth flows"
+	@echo "make android-demo-probe   two demo accounts exchanging messages (needs DEV_LOGIN_ENABLED)"
 
 venv:
 	$(PYTHON) -m venv $(VENV)
@@ -74,3 +76,6 @@ android-probe:
 
 android-login-probe:
 	$(PY) tools/android_login_probe.py --server $${SERVER:-http://127.0.0.1:8000}
+
+android-demo-probe:
+	$(PY) tools/android_demo_login_probe.py --server $${SERVER:-http://127.0.0.1:8000}

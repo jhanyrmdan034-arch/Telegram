@@ -58,6 +58,9 @@ class User(Base):
     # Application-level settings mirroring the client's settings screens.
     settings: Mapped[dict] = mapped_column(JSONB, default=dict, server_default="{}", nullable=False)
 
+    # True only for the seeded development accounts; dev login refuses anything else.
+    is_test_account: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", nullable=False)
     is_blocked: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     block_reason: Mapped[str | None] = mapped_column(Text)

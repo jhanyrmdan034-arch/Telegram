@@ -16,6 +16,7 @@ from .config import Settings, get_settings
 from .db import create_engine
 from .models import AppSetting, ErrorLog
 from .ratelimit import client_ip
+from .devlogin import dev_login_enabled, ensure_demo_accounts
 from .routers import (
     admin, auth, calls, chats, contacts, files, folders, health, messages, meta, support,
     users, ws,
@@ -50,6 +51,11 @@ def create_app(settings: Settings | None = None, engine=None) -> FastAPI:
         session_factory = async_sessionmaker(app_engine, expire_on_commit=False)
 
         runtime = await build_runtime(settings, app_engine, session_factory)
+        if dev_login_enabled(settings):
+            async with session_factory() as db:
+                accounts = await ensure_demo_accounts(db)
+            log.warning("Development login enabled for: %s",
+                        ", ".join(account.username for account in accounts))
         app.state.runtime = runtime
         await runtime.start()
         async with session_factory() as db:

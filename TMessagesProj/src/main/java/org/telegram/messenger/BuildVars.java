@@ -24,6 +24,17 @@ public class BuildVars {
      * 10.0.2.2 is the host machine as seen from the Android emulator.
      */
     public static final String PLATFORM_API_URL = "http://10.0.2.2:8000";
+
+    /**
+     * Development login: type one of the codes below instead of a phone number to
+     * sign in as a seeded test account, with no SMS. Compiled to false in release
+     * builds, and the backend refuses the endpoint entirely outside development.
+     */
+    public static final boolean DEV_LOGIN_ENABLED = BuildConfig.DEBUG;
+    public static final String[][] DEV_LOGIN_ACCOUNTS = {
+            {"10001", "demo_alice"},
+            {"10002", "demo_bob"},
+    };
     public static final String PLATFORM_WS_URL = "ws://10.0.2.2:8000/api/v1/ws";
 
     public static boolean DEBUG_VERSION = BuildConfig.DEBUG_VERSION;

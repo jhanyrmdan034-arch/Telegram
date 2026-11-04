@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select, update
 
 from ..deps import CurrentUser, DbDep, RuntimeDep
+from ..devlogin import dev_login_enabled, find_demo_user
 from ..models import (
     Device, OtpCode, RegistrationGrant, SecurityEvent, Session as DeviceSession, User,
 )
@@ -19,6 +20,7 @@ from ..ratelimit import client_ip
 from ..notifications import build_sms_sender
 from ..schemas import (
     LoginRequest,
+    DevLoginRequest,
     OtpChallenge,
     OtpRequest,
     OtpVerifyRequest,
@@ -158,6 +160,33 @@ async def register(payload: RegisterRequest, request: Request, db: DbDep, runtim
 
     await _security_event(db, user.id, "account.registered", request,
                           {"phone_verified": grant is not None})
+    return tokens
+
+
+@router.post("/dev-login", response_model=TokenPair)
+async def dev_login(payload: DevLoginRequest, request: Request, db: DbDep, runtime: RuntimeDep):
+    """Development-only passwordless sign-in for a seeded test account.
+
+    Returns 404 — not 403 — when the feature is off, so a production deployment
+    does not even reveal that the route exists. The session it creates is an
+    ordinary one: same token TTLs, same revocation, same audit trail.
+    """
+    if not dev_login_enabled(runtime.settings):
+        raise HTTPException(status_code=404, detail="Not found")
+    await runtime.login_limiter.enforce(f"dev-login:{client_ip(request)}")
+
+    user = await find_demo_user(db, payload.account)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Unknown test account")
+    if user.is_blocked:
+        raise HTTPException(status_code=403, detail="Account is blocked")
+
+    device = await _get_or_create_device(db, user.id, payload.device_name,
+                                         payload.platform)
+    tokens, _ = await _issue_tokens(db, runtime, user, device, request)
+    await _security_event(db, user.id, "auth.dev_login", request,
+                          {"account": payload.account, "environment": runtime.settings.environment})
+    log.warning("DEV LOGIN used for %s from %s", payload.account, client_ip(request))
     return tokens
 
 

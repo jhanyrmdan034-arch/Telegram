@@ -4,6 +4,7 @@ import android.os.Build;
 
 import com.google.gson.JsonObject;
 
+import org.telegram.messenger.BuildVars;
 import org.telegram.messenger.FileLog;
 import org.telegram.messenger.Utilities;
 import org.telegram.platform.PlatformBridge;
@@ -114,7 +115,36 @@ public final class PlatformAuthInterceptor {
 
     // ------------------------------------------------------------------- sendCode
 
+    /**
+     * Development login: a five digit code typed into the phone field signs in as a
+     * seeded test account, no SMS involved. Compiled to a no-op in release builds
+     * ({@link BuildVars#DEV_LOGIN_ENABLED}) and the backend also refuses it.
+     */
+    private static TLRPC.TL_auth_authorization tryDevLogin(PlatformBridge bridge, String phone,
+                                                           String deviceName)
+            throws PlatformException {
+        if (!BuildVars.DEV_LOGIN_ENABLED) {
+            return null;
+        }
+        String digits = PhoneIdentity.digits(phone);
+        if (digits == null) {
+            return null;
+        }
+        for (String[] entry : BuildVars.DEV_LOGIN_ACCOUNTS) {
+            if (digits.equals(entry[0]) || (digits.length() <= 10 && digits.endsWith(entry[0]))) {
+                FileLog.d("platform: development login as " + entry[1]);
+                JsonObject user = bridge.auth().devLogin(entry[1], deviceName);
+                return authorization(bridge, user, phone);
+            }
+        }
+        return null;
+    }
+
     private static TLObject sendCode(PlatformBridge bridge, String phone) throws PlatformException {
+        TLRPC.TL_auth_authorization devAuth = tryDevLogin(bridge, phone, deviceName());
+        if (devAuth != null) {
+            return devAuth;
+        }
         String username = PhoneIdentity.usernameFor(phone);
         if (username == null) {
             throw new PlatformException(PlatformException.Kind.VALIDATION, 422,

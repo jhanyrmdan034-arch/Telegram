@@ -64,6 +64,14 @@ class OtpChallenge(BaseModel):
     registration_token: str | None = None
 
 
+class DevLoginRequest(BaseModel):
+    """Development-only sign-in for a seeded test account."""
+
+    account: str = Field(min_length=3, max_length=64)
+    device_name: str = Field(default="Development device", max_length=128)
+    platform: Literal["android", "ios", "web", "desktop"] = "android"
+
+
 class OtpVerifyRequest(BaseModel):
     username: str = Field(min_length=4, max_length=64)
     code: str = Field(min_length=4, max_length=8)

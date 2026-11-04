@@ -47,6 +47,48 @@
         }
       }
     },
+    "/api/v1/auth/dev-login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Dev Login",
+        "description": "Development-only passwordless sign-in for a seeded test account.\n\nReturns 404 — not 403 — when the feature is off, so a production deployment\ndoes not even reveal that the route exists. The session it creates is an\nordinary one: same token TTLs, same revocation, same audit trail.",
+        "operationId": "dev_login_api_v1_auth_dev_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DevLoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/otp/request": {
       "post": {
         "tags": [
@@ -5304,6 +5346,39 @@
         ],
         "title": "DashboardStats"
       },
+      "DevLoginRequest": {
+        "properties": {
+          "account": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Account"
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Device Name",
+            "default": "Development device"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios",
+              "web",
+              "desktop"
+            ],
+            "title": "Platform",
+            "default": "android"
+          }
+        },
+        "type": "object",
+        "required": [
+          "account"
+        ],
+        "title": "DevLoginRequest",
+        "description": "Development-only sign-in for a seeded test account."
+      },
       "FileOut": {
         "properties": {
           "id": {
@@ -5883,6 +5958,17 @@
               }
             ],
             "title": "Debug Code"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Token"
           }
         },
         "type": "object",
@@ -6075,6 +6161,18 @@
             ],
             "title": "Platform",
             "default": "android"
+          },
+          "registration_token": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Registration Token"
           }
         },
         "type": "object",

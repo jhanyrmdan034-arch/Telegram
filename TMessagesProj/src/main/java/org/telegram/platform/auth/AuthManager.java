@@ -115,6 +115,21 @@ public final class AuthManager {
         return applySession(pair);
     }
 
+    /**
+     * Development-only: signs in as a seeded test account without any code.
+     * The backend answers 404 unless the feature is enabled there, so a release
+     * build talking to a production server can never use this path.
+     */
+    public JsonObject devLogin(String account, String deviceName) throws PlatformException {
+        JsonObject body = new JsonObject();
+        body.addProperty("account", account);
+        body.addProperty("device_name", deviceName);
+        body.addProperty("platform", DEVICE_PLATFORM);
+        JsonObject pair = api.executePublic("POST", PlatformApi.API_PREFIX + "/auth/dev-login", body)
+                .getAsJsonObject();
+        return applySession(pair);
+    }
+
     /** Restores a session persisted from a previous app start. */
     public boolean restore() {
         if (tokens.accessToken() == null && tokens.refreshToken() == null) {

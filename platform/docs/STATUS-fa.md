@@ -87,7 +87,7 @@
 |---|---|---|
 | ۰ — تحلیل کامل | ✅ انجام شد | ۲۱۴ کلاس صفحه، ۳۵۸٬۲۳۰ خط، ۲۷۱ نقطهٔ `sendRequest` در صفحه‌ها، ۸۷۲ نوع TL؛ خروجی: `docs/android/phase0-inventory.md` + `dependency-map.json` |
 | ۱ — زیرساخت ارتباطی | ✅ کد نوشته و اعتبارسنجی شد | ۲۰ فایل / ۲٬۴۹۲ خط در `org.telegram.platform`؛ جزئیات: `docs/android/phase1-android-client-fa.md` |
-| ۲ — صفحهٔ ورود | ✅ انجام و آزمایش شد | `PlatformAuthInterceptor` + `PhoneIdentity`؛ صفر خط حذف‌شده در فایل‌های UI؛ ۳۳ بررسی زنده + ۱۵ تست جدید؛ `docs/android/phase2-login-fa.md` |
+| ۲ — صفحهٔ ورود | ✅ انجام و آزمایش شد (+ **ورود آزمایشی بدون OTP** برای تست دوکاربره: `docs/android/dev-login-fa.md`) | `PlatformAuthInterceptor` + `PhoneIdentity`؛ صفر خط حذف‌شده در فایل‌های UI؛ ۳۳ بررسی زنده + ۱۵ تست جدید؛ `docs/android/phase2-login-fa.md` |
 | ۳ — لیست دیالوگ | ⏳ بعدی | بک‌اند آماده است (`last_message`، `unread_count`، `pinned`، `peer.is_online`، پوشه‌ها) |
 | ۴ — پیام خصوصی | ⏳ | بک‌اند آماده است (ارسال/ویرایش/حذف/فوروارد/جست‌وجو/خوانده‌شده + outbox) |
 

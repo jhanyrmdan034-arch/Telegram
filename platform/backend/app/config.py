@@ -49,6 +49,9 @@ class Settings(BaseSettings):
     otp_ttl_seconds: int = 300
     # Sign-up requires a delivered verification code (see RegistrationGrant).
     require_phone_verification: bool = True
+    # Development only: passwordless sign-in for the two seeded demo accounts.
+    # Rejected in production by validate_for_production().
+    dev_login_enabled: bool = False
     otp_max_attempts: int = 5
     otp_debug: bool = False
     # "log" is development only. twilio | kavenegar | webhook need the credentials below.
@@ -99,6 +102,10 @@ class Settings(BaseSettings):
             problems.append("SMS_PROVIDER=kavenegar but KAVENEGAR_API_KEY is empty")
         if self.sms_provider.strip().lower() == "webhook" and not self.sms_webhook_url:
             problems.append("SMS_PROVIDER=webhook but SMS_WEBHOOK_URL is empty")
+        if self.dev_login_enabled:
+            problems.append(
+                "DEV_LOGIN_ENABLED must be false in production: it bypasses verification"
+            )
         if self.otp_debug:
             problems.append("OTP_DEBUG must be false in production (it leaks codes)")
         if problems:

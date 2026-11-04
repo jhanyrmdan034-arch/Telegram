@@ -52,6 +52,22 @@ async def _create_superuser(username: str, password: str, display_name: str) -> 
     await engine.dispose()
 
 
+async def _seed_demo() -> None:
+    settings = get_settings()
+    if not settings.dev_login_enabled:
+        print("DEV_LOGIN_ENABLED is false: demo accounts are not created")
+        return
+    engine = create_engine(settings)
+    factory = get_session_factory(settings)
+    from .devlogin import ensure_demo_accounts
+
+    async with factory() as db:
+        accounts = await ensure_demo_accounts(db)
+        for account in accounts:
+            print(f"demo account {account.username} ({account.id})")
+    await engine.dispose()
+
+
 async def _check() -> None:
     settings = get_settings()
     engine = create_engine(settings)
@@ -72,6 +88,7 @@ def main(argv: list[str] | None = None) -> int:
     su.add_argument("--password", required=True)
     su.add_argument("--display-name", default="Super Admin")
 
+    sub.add_parser("seed-demo", help="create the development test accounts (needs DEV_LOGIN_ENABLED)")
     sub.add_parser("check", help="verify database connectivity")
 
     args = parser.parse_args(argv)
@@ -79,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_seed())
     elif args.command == "create-superuser":
         asyncio.run(_create_superuser(args.username, args.password, args.display_name))
+    elif args.command == "seed-demo":
+        asyncio.run(_seed_demo())
     elif args.command == "check":
         asyncio.run(_check())
     else:  # pragma: no cover
