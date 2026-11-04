@@ -23,6 +23,9 @@ class RegisterRequest(BaseModel):
     display_name: str = Field(min_length=1, max_length=128)
     device_name: str = Field(default="Unknown device", max_length=128)
     platform: Literal["android", "ios", "web", "desktop"] = "android"
+    # Issued by POST /auth/otp/request (purpose "register") and required by default:
+    # it proves a code was delivered to the phone before the account existed.
+    registration_token: str | None = Field(default=None, max_length=64)
 
     @field_validator("username")
     @classmethod
@@ -57,6 +60,8 @@ class OtpChallenge(BaseModel):
     delivery: Literal["sms", "log"]
     expires_in: int
     debug_code: str | None = None
+    # Only present when purpose == "register" and the account does not exist yet.
+    registration_token: str | None = None
 
 
 class OtpVerifyRequest(BaseModel):

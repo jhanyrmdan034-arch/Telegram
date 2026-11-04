@@ -287,3 +287,112 @@ async def test_registration_rejects_duplicate_phone_identity(client):
         "username": user["username"], "password": user["password"], "display_name": "Again",
     })
     assert duplicate.status_code in (409, 422)
+
+
+# --------------------------------------------------------------------------- #
+# Proof of phone ownership before an account exists
+# --------------------------------------------------------------------------- #
+async def test_registration_without_verification_is_refused(client):
+    response = await client.post("/api/v1/auth/register", json={
+        "username": "ph49170000001", "password": "Password123", "display_name": "No Proof",
+    })
+    assert response.status_code == 403
+    assert "not verified" in response.json()["detail"].lower()
+
+    # The account really does not exist afterwards.
+    assert (await client.post("/api/v1/auth/otp/request",
+                              json={"username": "ph49170000001"})).status_code == 404
+
+
+async def test_registration_token_is_single_use(client):
+    username = "ph49170000002"
+    challenge = (await client.post("/api/v1/auth/otp/request",
+                                   json={"username": username, "purpose": "register"})).json()
+    token = challenge["registration_token"]
+    assert token
+
+    first = await client.post("/api/v1/auth/register", json={
+        "username": username, "password": "Password123", "display_name": "Owner",
+        "registration_token": token,
+    })
+    assert first.status_code == 201, first.text
+
+    replay = await client.post("/api/v1/auth/register", json={
+        "username": username, "password": "Password123", "display_name": "Impostor",
+        "registration_token": token,
+    })
+    assert replay.status_code in (409, 403)
+
+
+async def test_registration_token_is_bound_to_the_phone(client):
+    """A token obtained for one number cannot create an account for another."""
+    owner_token = (await client.post("/api/v1/auth/otp/request",
+                                     json={"username": "ph49170000003",
+                                           "purpose": "register"})).json()["registration_token"]
+    stolen = await client.post("/api/v1/auth/register", json={
+        "username": "ph49170000004", "password": "Password123", "display_name": "Thief",
+        "registration_token": owner_token,
+    })
+    assert stolen.status_code == 403
+
+
+async def test_registration_requires_a_delivered_code(client, monkeypatch):
+    """If the gateway fails, no grant is handed out and sign-up stays impossible."""
+    from app.routers import auth as auth_router
+    from app.notifications import DeliveryError
+
+    class BrokenSender:
+        name = "twilio"
+
+        async def send(self, destination, text):
+            raise DeliveryError("gateway down")
+
+    monkeypatch.setattr(auth_router, "build_sms_sender", lambda settings: BrokenSender())
+    failed = await client.post("/api/v1/auth/otp/request",
+                               json={"username": "ph49170000005", "purpose": "register"})
+    assert failed.status_code == 502
+    monkeypatch.undo()
+
+    blocked = await client.post("/api/v1/auth/register", json={
+        "username": "ph49170000005", "password": "Password123", "display_name": "Nope",
+    })
+    assert blocked.status_code == 403
+
+
+async def test_registration_token_expires(client, app):
+    username = "ph49170000006"
+    token = (await client.post("/api/v1/auth/otp/request",
+                               json={"username": username, "purpose": "register"})).json()[
+        "registration_token"]
+    from app.models import RegistrationGrant
+    from sqlalchemy import select
+
+    factory = app.state.runtime.session_factory
+    async with factory() as db:
+        grant = (await db.execute(
+            select(RegistrationGrant).where(RegistrationGrant.token == token)
+        )).scalar_one()
+        grant.expires_at = datetime.now(UTC) - timedelta(seconds=1)
+        await db.commit()
+
+    expired = await client.post("/api/v1/auth/register", json={
+        "username": username, "password": "Password123", "display_name": "Late",
+        "registration_token": token,
+    })
+    assert expired.status_code == 403
+    assert "expired" in expired.json()["detail"].lower()
+
+
+async def test_registration_spends_the_code(client):
+    """The code used for sign-up cannot then be used to open a session."""
+    username = "ph49170000007"
+    challenge = (await client.post("/api/v1/auth/otp/request",
+                                   json={"username": username, "purpose": "register"})).json()
+    registered = await client.post("/api/v1/auth/register", json={
+        "username": username, "password": "Password123", "display_name": "Owner",
+        "registration_token": challenge["registration_token"],
+    })
+    assert registered.status_code == 201
+    reused = await client.post("/api/v1/auth/otp/verify",
+                               json={"username": username, "code": challenge["debug_code"]})
+    assert reused.status_code == 401

@@ -14,7 +14,9 @@ import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Translates the authentication TL requests that {@code LoginActivity} already
@@ -39,6 +41,13 @@ import java.util.UUID;
 public final class PlatformAuthInterceptor {
 
     private static final String TAG = "PlatformAuth";
+
+    /**
+     * Sign-up grants handed out when a code is requested for a number that has no
+     * account yet. The backend only issues a grant after the code was really
+     * delivered, and accepts exactly one registration with it.
+     */
+    private static final Map<String, String> PENDING_GRANTS = new ConcurrentHashMap<>();
 
     private PlatformAuthInterceptor() {
     }
@@ -113,14 +122,23 @@ public final class PlatformAuthInterceptor {
         }
         try {
             JsonObject challenge = bridge.auth().requestOtp(username, "login");
+            PENDING_GRANTS.remove(username);
             return sentCode(phone, challenge);
         } catch (PlatformException e) {
             if (e.kind() == PlatformException.Kind.NOT_FOUND) {
-                // The account does not exist yet: the UI shows its own sign-up page.
+                // Unknown number: ask for a sign-up code. The code is really sent to
+                // the phone, and only then does the backend allow the registration
+                // (via the grant it returns here).
+                JsonObject challenge = bridge.auth().requestOtp(username, "register");
+                String grant = challenge != null && challenge.has("registration_token")
+                        && !challenge.get("registration_token").isJsonNull()
+                        ? challenge.get("registration_token").getAsString() : null;
+                if (grant != null) {
+                    PENDING_GRANTS.put(username, grant);
+                }
+                // The UI shows its own sign-up page, exactly as Telegram does.
                 TLRPC.TL_auth_sentCodeSuccess success = new TLRPC.TL_auth_sentCodeSuccess();
-                TLRPC.TL_auth_authorizationSignUpRequired required =
-                        new TLRPC.TL_auth_authorizationSignUpRequired();
-                success.authorization = required;
+                success.authorization = new TLRPC.TL_auth_authorizationSignUpRequired();
                 return success;
             }
             throw e;
@@ -180,14 +198,29 @@ public final class PlatformAuthInterceptor {
         // account also be opened with a password from another device if needed.
         String password = UUID.randomUUID().toString().replace("-", "")
                 + UUID.randomUUID().toString().replace("-", "");
+        String grant = PENDING_GRANTS.get(username);
+        if (grant == null) {
+            // Without a grant the backend will refuse anyway; tell the UI to go back
+            // and request a fresh code instead of failing with a confusing error.
+            throw new PlatformException(PlatformException.Kind.VALIDATION, 403,
+                    "Verification code is missing or expired", "PHONE_CODE_EXPIRED");
+        }
         try {
-            JsonObject user = bridge.auth().register(username, password, displayName, deviceName());
+            JsonObject user = bridge.auth().register(username, password, displayName,
+                    deviceName(), grant);
+            PENDING_GRANTS.remove(username);
             bridge.tokens().saveAccountPassword(password);
             return authorization(bridge, user, phone);
         } catch (PlatformException e) {
+            PENDING_GRANTS.remove(username);
             if (e.kind() == PlatformException.Kind.CONFLICT) {
                 throw new PlatformException(PlatformException.Kind.CONFLICT, 409,
                         "Account already exists", "PHONE_NUMBER_OCCUPIED");
+            }
+            if (e.kind() == PlatformException.Kind.FORBIDDEN) {
+                // Grant expired or already spent: send the user back for a new code.
+                throw new PlatformException(PlatformException.Kind.VALIDATION, 403,
+                        "Registration was not authorised", "PHONE_CODE_EXPIRED");
             }
             throw e;
         }

@@ -49,7 +49,7 @@ public final class DtoMapper {
             user.status = status;
         } else if (string(json, "last_seen_at") != null) {
             TLRPC.TL_userStatusOffline status = new TLRPC.TL_userStatusOffline();
-            status.was_online = parseUnix(string(json, "last_seen_at"));
+            status.expires = parseUnix(string(json, "last_seen_at"));
             user.status = status;
         } else {
             user.status = new TLRPC.TL_userStatusRecently();

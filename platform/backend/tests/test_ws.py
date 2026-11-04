@@ -19,8 +19,12 @@ def sync_client(settings):
 
 def _register(client: TestClient) -> dict:
     username = f"ws_{uuid.uuid4().hex[:8]}"
+    challenge = client.post("/api/v1/auth/otp/request",
+                            json={"username": username, "purpose": "register"})
+    assert challenge.status_code == 202, challenge.text
     response = client.post("/api/v1/auth/register", json={
         "username": username, "password": "WebSocketPass123", "display_name": username,
+        "registration_token": challenge.json().get("registration_token"),
     })
     assert response.status_code == 201, response.text
     return response.json()

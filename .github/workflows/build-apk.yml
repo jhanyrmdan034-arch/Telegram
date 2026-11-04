@@ -53,8 +53,11 @@ jobs:
 
       # This single task compiles every Java source of the app module, including
       # org.telegram.platform.* and the patched ConnectionsManager.
-      - name: Compile (:TMessagesProj:compileDebugJavaWithJavac)
-        run: ./gradlew --no-daemon --stacktrace :TMessagesProj:compileDebugJavaWithJavac 2>&1 | tee compile.log
+      - name: Compile Java sources
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :TMessagesProj:compileDebugJavaWithJavac 2>&1 | tee compile.log \
+            || ./gradlew --no-daemon --stacktrace :TMessagesProj:compileAfatDebugJavaWithJavac 2>&1 | tee -a compile.log
 
       - name: Upload compile log
         if: always()

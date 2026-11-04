@@ -23,7 +23,7 @@ from app.models import Base
 TABLES = (
     "users, devices, sessions, contacts, blocked_users, chats, chat_members, messages, files,"
     " sticker_sets, stickers, calls, reports, tickets, ticket_messages, audit_log,"
-    " security_events, error_log, app_settings, roles"
+    " security_events, error_log, app_settings, roles, otp_codes, registration_grants"
 )
 
 
@@ -97,16 +97,26 @@ async def db_session(app):
 async def register_user(client: httpx.AsyncClient, username: str | None = None,
                         password: str = "SuperSecret123") -> dict:
     username = username or f"user_{uuid.uuid4().hex[:10]}"
+    token = await registration_token(client, username)
     response = await client.post(
         "/api/v1/auth/register",
         json={"username": username, "password": password, "display_name": username.title(),
-              "device_name": "pytest", "platform": "android"},
+              "device_name": "pytest", "platform": "android",
+              "registration_token": token},
     )
     assert response.status_code == 201, response.text
     body = response.json()
     body["username"] = username
     body["password"] = password
     return body
+
+
+async def registration_token(client: httpx.AsyncClient, username: str) -> str | None:
+    """Requests a verification code; sign-up needs the grant it returns."""
+    challenge = await client.post("/api/v1/auth/otp/request",
+                                  json={"username": username, "purpose": "register"})
+    assert challenge.status_code == 202, challenge.text
+    return challenge.json().get("registration_token")
 
 
 def auth(token: str) -> dict[str, str]:

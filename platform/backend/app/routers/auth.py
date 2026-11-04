@@ -12,7 +12,9 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select, update
 
 from ..deps import CurrentUser, DbDep, RuntimeDep
-from ..models import Device, OtpCode, SecurityEvent, Session as DeviceSession, User
+from ..models import (
+    Device, OtpCode, RegistrationGrant, SecurityEvent, Session as DeviceSession, User,
+)
 from ..ratelimit import client_ip
 from ..notifications import build_sms_sender
 from ..schemas import (
@@ -115,6 +117,24 @@ async def register(payload: RegisterRequest, request: Request, db: DbDep, runtim
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(status_code=409, detail="Username is already taken")
 
+    grant: RegistrationGrant | None = None
+    if runtime.settings.require_phone_verification:
+        if not payload.registration_token:
+            raise HTTPException(
+                status_code=403,
+                detail="Phone number is not verified: request a verification code first",
+            )
+        grant = (await db.execute(
+            select(RegistrationGrant).where(RegistrationGrant.token == payload.registration_token)
+        )).scalar_one_or_none()
+        if grant is None or grant.username != payload.username:
+            raise HTTPException(status_code=403, detail="Invalid registration token")
+        if grant.used_at is not None:
+            raise HTTPException(status_code=409, detail="Registration token already used")
+        if grant.expires_at <= datetime.now(UTC):
+            raise HTTPException(status_code=403,
+                                detail="Registration token expired, request a new code")
+
     user = User(
         username=payload.username,
         display_name=payload.display_name,
@@ -125,7 +145,19 @@ async def register(payload: RegisterRequest, request: Request, db: DbDep, runtim
     await db.flush()
     device = await _get_or_create_device(db, user.id, payload.device_name, payload.platform)
     tokens, _ = await _issue_tokens(db, runtime, user, device, request)
-    await _security_event(db, user.id, "account.registered", request)
+
+    if grant is not None:
+        grant.used_at = datetime.now(UTC)
+        # The code was spent on the sign-up itself, so it cannot also be used to sign in.
+        await db.execute(
+            update(OtpCode)
+            .where(OtpCode.username == payload.username, OtpCode.consumed_at.is_(None))
+            .values(consumed_at=datetime.now(UTC))
+        )
+        await db.commit()
+
+    await _security_event(db, user.id, "account.registered", request,
+                          {"phone_verified": grant is not None})
     return tokens
 
 
@@ -150,13 +182,23 @@ async def request_otp(payload: OtpRequest, request: Request, db: DbDep, runtime:
     )
 
     code = f"{secrets.randbelow(1_000_000):06d}"
+    expires_at = now + timedelta(seconds=runtime.settings.otp_ttl_seconds)
     record = OtpCode(
         username=payload.username,
         code_hash=_otp_digest(runtime.settings.jwt_secret, payload.username, code),
         purpose=payload.purpose,
-        expires_at=now + timedelta(seconds=runtime.settings.otp_ttl_seconds),
+        expires_at=expires_at,
     )
     db.add(record)
+
+    registration_token = None
+    if payload.purpose == "register" and user is None:
+        # The code went to the phone; this grant lets exactly one registration
+        # through for that number, and only until the code expires.
+        registration_token = secrets.token_urlsafe(32)
+        db.add(RegistrationGrant(
+            username=payload.username, token=registration_token, expires_at=expires_at,
+        ))
     await db.commit()
 
     sender = build_sms_sender(runtime.settings)
@@ -174,6 +216,7 @@ async def request_otp(payload: OtpRequest, request: Request, db: DbDep, runtime:
         delivery="log" if sender.name == "log" else "sms",
         expires_in=runtime.settings.otp_ttl_seconds,
         debug_code=code if runtime.settings.otp_debug else None,
+        registration_token=registration_token,
     )
 
 

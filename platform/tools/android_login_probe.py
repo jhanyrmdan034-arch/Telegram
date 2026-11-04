@@ -60,6 +60,7 @@ class PlatformClient:
         self.access: str | None = None
         self.refresh_token: str | None = None
         self.password: str | None = None
+        self.registration_token: str | None = None
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.access}"} if self.access else {}
@@ -73,6 +74,12 @@ class PlatformClient:
         response = self.http.post("/api/v1/auth/otp/request",
                                   json={"username": username_for(phone), "purpose": "login"})
         if response.status_code == 404:
+            # Same as the adapter: ask for a sign-up code, which returns the grant
+            # that proves this number was really reachable, then show sign-up.
+            challenge = self.http.post("/api/v1/auth/otp/request", json={
+                "username": username_for(phone), "purpose": "register"})
+            if challenge.status_code == 202:
+                self.registration_token = challenge.json().get("registration_token")
             return "sign_up_required", response
         if response.status_code == 202:
             return "code_sent", response
@@ -99,6 +106,7 @@ class PlatformClient:
             "display_name": f"{first} {last}".strip(),
             "device_name": "Probe Device",
             "platform": "android",
+            "registration_token": self.registration_token,
         })
         if response.status_code == 201:
             pair = response.json()
@@ -194,6 +202,25 @@ def main() -> int:
           f"{response.status_code} {response.text[:120]}")
     check("backend answered 404 for the derived username", response.status_code == 404)
 
+    section("1b. sign-up without a delivered code must be refused")
+    unproven = PlatformClient(base).http.post("/api/v1/auth/register", json={
+        "username": username_for("+4917999999999"), "password": "ProbePass123",
+        "display_name": "No Proof", "device_name": "Probe", "platform": "android",
+    })
+    check("backend refuses unverified registration", unproven.status_code == 403,
+          unproven.text[:120])
+    # PlatformAuthInterceptor turns a 403 from /auth/register into
+    # TL_error(400, "PHONE_CODE_EXPIRED"), which makes the app go back to the
+    # phone screen and ask for a fresh code (see signUp() in the interceptor).
+    check("backend explains that the number is unverified",
+          "not verified" in unproven.json().get("detail", "").lower(), unproven.text[:120])
+    # The app returns to the phone screen; requesting a new code must then work.
+    retry = PlatformClient(base)
+    retry.auth_send_code("+4917999999999")
+    recovered = retry.auth_sign_up("+4917999999999", "Now", "Verified")
+    check("a freshly delivered code lets that number register",
+          recovered.status_code == 201, recovered.text[:120])
+
     section("2. registration — TL_auth_signUp creates a real account")
     registered = client.auth_sign_up(phone, "Sara", "Ahmadi")
     check("account created (201)", registered.status_code == 201, registered.text[:160])
@@ -275,6 +302,27 @@ def main() -> int:
         remaining = returning.sessions().json()
         check("revoked device disappeared",
               all(row["id"] != others[0]["id"] for row in remaining))
+
+    section("9a. server error 500 must map to a typed error, not a crash")
+    class _Boom(BaseHTTPRequestHandler):
+        def do_POST(self):  # noqa: N802
+            self.send_response(500)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"detail": "boom"}')
+
+        def log_message(self, *args):
+            pass
+
+    boom = ThreadingHTTPServer(("127.0.0.1", 0), _Boom)
+    threading.Thread(target=boom.serve_forever, daemon=True).start()
+    try:
+        broken = httpx.post(f"http://127.0.0.1:{boom.server_port}/api/v1/auth/otp/request",
+                            json={"username": "ph1"}, timeout=5)
+        check("500 is surfaced as a server error",
+              tl_error_text(broken.status_code, "") == "INTERNAL_ERROR")
+    finally:
+        boom.shutdown()
 
     section("9. transport failures — the client must see typed errors, not crashes")
     closed = 65533

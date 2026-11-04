@@ -70,14 +70,24 @@ public final class AuthManager {
         return applySession(pair);
     }
 
+    /**
+     * Creates the account. {@code registrationToken} is the grant returned by
+     * {@link #requestOtp} for an unknown number: the backend refuses sign-up
+     * without it, so an account cannot be created for a phone that never received
+     * a code.
+     */
     public JsonObject register(String username, String password, String displayName,
-                               String deviceName) throws PlatformException {
+                               String deviceName, String registrationToken)
+            throws PlatformException {
         JsonObject body = new JsonObject();
         body.addProperty("username", username);
         body.addProperty("password", password);
         body.addProperty("display_name", displayName);
         body.addProperty("device_name", deviceName);
         body.addProperty("platform", DEVICE_PLATFORM);
+        if (registrationToken != null) {
+            body.addProperty("registration_token", registrationToken);
+        }
         JsonObject pair = api.executePublic("POST", PlatformApi.API_PREFIX + "/auth/register", body)
                 .getAsJsonObject();
         return applySession(pair);

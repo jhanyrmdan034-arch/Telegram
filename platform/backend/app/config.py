@@ -47,6 +47,8 @@ class Settings(BaseSettings):
     # OTP (phone/username verification). In production wire `SMS_PROVIDER` to a real
     # gateway; `otp_debug` echoes the code in the API response for local testing only.
     otp_ttl_seconds: int = 300
+    # Sign-up requires a delivered verification code (see RegistrationGrant).
+    require_phone_verification: bool = True
     otp_max_attempts: int = 5
     otp_debug: bool = False
     # "log" is development only. twilio | kavenegar | webhook need the credentials below.

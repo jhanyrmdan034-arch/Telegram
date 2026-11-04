@@ -131,6 +131,23 @@ class OtpCode(Base):
     created_at: Mapped[datetime] = _created_at()
 
 
+class RegistrationGrant(Base):
+    """Proof that a verification code was delivered to a phone before sign-up.
+
+    Registration is only accepted with an unused, unexpired grant, so an account
+    can never be created for a number the registrant did not ask a code for.
+    """
+
+    __tablename__ = "registration_grants"
+
+    id: Mapped[uuid.UUID] = _pk()
+    username: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    token: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created_at()
+
+
 class Contact(Base):
     __tablename__ = "contacts"
     __table_args__ = (UniqueConstraint("owner_id", "contact_id", name="uq_contact_owner_target"),)
