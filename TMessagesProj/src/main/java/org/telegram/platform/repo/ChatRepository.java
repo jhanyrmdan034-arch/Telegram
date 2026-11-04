@@ -111,6 +111,28 @@ public final class ChatRepository {
 
     // ------------------------------------------------------------- folders tab
 
+    /** Synchronous variants used by the dialog-list actions. */
+    public void pinBlocking(String chatId, boolean pinned) throws PlatformException {
+        com.google.gson.JsonObject body = new com.google.gson.JsonObject();
+        body.addProperty("pinned", pinned);
+        api.post(PlatformApi.API_PREFIX + "/chats/" + chatId + "/pin", body);
+    }
+
+    public void markReadBlocking(String chatId, int seq) throws PlatformException {
+        api.post(PlatformApi.API_PREFIX + "/chats/" + chatId + "/read?seq=" + Math.max(0, seq),
+                new com.google.gson.JsonObject());
+    }
+
+    public void archiveBlocking(String chatId, boolean archived) throws PlatformException {
+        com.google.gson.JsonObject body = new com.google.gson.JsonObject();
+        body.addProperty("archived", archived);
+        api.post(PlatformApi.API_PREFIX + "/chats/" + chatId + "/archive", body);
+    }
+
+    public void deleteBlocking(String chatId) throws PlatformException {
+        api.delete(PlatformApi.API_PREFIX + "/chats/" + chatId);
+    }
+
     public void folders(final Callback<List<JsonObject>> callback) {
         executor.execute(() -> {
             try {

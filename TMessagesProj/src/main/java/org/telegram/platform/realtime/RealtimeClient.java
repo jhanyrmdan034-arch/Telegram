@@ -26,6 +26,14 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public final class RealtimeClient {
 
+    private final java.util.Set<String> seenEventIds =
+            java.util.Collections.newSetFromMap(new java.util.LinkedHashMap<String, Boolean>() {
+                @Override
+                protected boolean removeEldestEntry(java.util.Map.Entry<String, Boolean> eldest) {
+                    return size() > 1024;
+                }
+            });
+
     public interface EventListener {
         void onEvent(String type, JsonObject data);
 
@@ -121,13 +129,20 @@ public final class RealtimeClient {
             String type = envelope.has("type") ? envelope.get("type").getAsString() : "unknown";
             JsonObject data = envelope.has("data") && envelope.get("data").isJsonObject()
                     ? envelope.getAsJsonObject("data") : new JsonObject();
+            String eventId = envelope.has("event_id") && !envelope.get("event_id").isJsonNull()
+                    ? envelope.get("event_id").getAsString() : null;
             EventListener target = listener;
-            if (target != null) {
+            if (target != null && !isDuplicate(eventId)) {
                 target.onEvent(type, data);
             }
         } catch (RuntimeException ignored) {
             // Malformed frame: ignore rather than tear down the socket.
         }
+    }
+
+    /** Server-assigned id per frame: a reconnect may replay one we already applied. */
+    private boolean isDuplicate(String eventId) {
+        return eventId != null && !eventId.isEmpty() && !seenEventIds.add(eventId);
     }
 
     private void scheduleReconnect() {

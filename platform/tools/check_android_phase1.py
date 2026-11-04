@@ -130,6 +130,8 @@ def check_endpoints(files: list[Path]) -> tuple[list[str], int]:
 
     problems = []
     for endpoint in sorted(used):
+        # Query strings are transport detail, not part of the path contract.
+        endpoint = endpoint.split("?")[0]
         if endpoint in declared or _matches_template(endpoint, declared):
             continue
         problems.append(f"endpoint not in OpenAPI: {endpoint}")

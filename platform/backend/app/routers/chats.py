@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from ..deps import CurrentUser, DbDep, RuntimeDep
 from ..models import Chat, ChatMember, User
 from ..schemas import (
+    ChatArchive,
     ChatCreate,
     ChatPin,
     ChatMemberOut,
@@ -145,11 +146,13 @@ async def list_chats(
     type_: str | None = Query(default=None, alias="type"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
+    archived: bool = Query(default=False, description="Archived dialogs are paged separately"),
 ):
     stmt = (
         select(Chat, ChatMember)
         .join(ChatMember, ChatMember.chat_id == Chat.id)
-        .where(ChatMember.user_id == user.id, ChatMember.left_at.is_(None))
+        .where(ChatMember.user_id == user.id, ChatMember.left_at.is_(None),
+               ChatMember.archived.is_(archived))
         .order_by(ChatMember.is_pinned.desc(), Chat.updated_at.desc())
         .limit(limit)
         .offset(offset)
@@ -361,10 +364,24 @@ async def leave_chat(chat_id: uuid.UUID, user: CurrentUser, db: DbDep, runtime: 
 
 
 @router.post("/{chat_id}/pin", status_code=204)
-async def pin_chat(chat_id: uuid.UUID, payload: ChatPin, user: CurrentUser, db: DbDep):
+async def pin_chat(chat_id: uuid.UUID, payload: ChatPin, user: CurrentUser,
+                   db: DbDep, runtime: RuntimeDep):
     _chat, member = await require_membership(db, chat_id, user.id)
     member.is_pinned = payload.pinned
     await db.commit()
+    await emit(runtime, await member_ids(db, chat_id), "dialog.updated",
+               {"chat_id": str(chat_id), "user_id": str(user.id), "pinned": payload.pinned})
+    return None
+
+
+@router.post("/{chat_id}/archive", status_code=204)
+async def archive_chat(chat_id: uuid.UUID, payload: ChatArchive, user: CurrentUser,
+                       db: DbDep, runtime: RuntimeDep):
+    _chat, member = await require_membership(db, chat_id, user.id)
+    member.archived = payload.archived
+    await db.commit()
+    await emit(runtime, await member_ids(db, chat_id), "dialog.updated",
+               {"chat_id": str(chat_id), "user_id": str(user.id), "archived": payload.archived})
     return None
 
 

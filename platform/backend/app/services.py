@@ -161,6 +161,7 @@ def chat_payload(
         "last_read_seq": member.last_read_seq if member else 0,
         "unread_count": unread,
         "pinned": bool(member.is_pinned) if member else False,
+        "archived": bool(member.archived) if member else False,
         "last_message": last_message,
         "peer": peer,
     }

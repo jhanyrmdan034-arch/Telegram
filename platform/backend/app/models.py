@@ -231,6 +231,7 @@ class ChatMember(Base):
     joined_at: Mapped[datetime] = _created_at()
     last_read_seq: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0", nullable=False)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
+    archived: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     is_muted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", nullable=False)
     muted_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     left_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

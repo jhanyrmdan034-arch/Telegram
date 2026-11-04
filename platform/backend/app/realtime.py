@@ -47,6 +47,10 @@ class ConnectionManager:
         return sum(len(s) for s in self._connections.values())
 
     async def send_to_users(self, user_ids: list[uuid.UUID], payload: dict[str, Any]) -> None:
+        # Every delivered frame carries a unique id: on reconnect the client can
+        # drop frames it has already applied instead of double-counting unread.
+        if "event_id" not in payload:
+            payload = {**payload, "event_id": uuid.uuid4().hex}
         message = json.dumps(payload, default=str)
         dead: list[tuple[uuid.UUID, WebSocket]] = []
         for user_id in user_ids:

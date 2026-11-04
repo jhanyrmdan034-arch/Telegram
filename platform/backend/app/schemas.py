@@ -168,6 +168,7 @@ class ChatOut(APIModel):
     # Fields the client's dialog list needs to render a row without extra calls.
     unread_count: int = 0
     pinned: bool = False
+    archived: bool = False
     last_message: dict[str, Any] | None = None
     peer: dict[str, Any] | None = None
 
@@ -182,6 +183,10 @@ class ChatMemberOut(BaseModel):
 
 class ForwardRequest(BaseModel):
     chat_ids: list[uuid.UUID] = Field(min_length=1, max_length=20)
+
+
+class ChatArchive(BaseModel):
+    archived: bool = True
 
 
 class ChatPin(BaseModel):

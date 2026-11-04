@@ -70,6 +70,9 @@ public final class PlatformBridge {
             @Override
             public void onEvent(String type, com.google.gson.JsonObject data) {
                 messages.applyRealtimeEvent(type, data);
+                // The dialog list refreshes itself on new messages, presence and
+                // read receipts: no restart, no pull-to-refresh needed.
+                org.telegram.platform.tl.PlatformDialogsSync.onRealtimeEvent(0, type, data);
             }
 
             @Override
@@ -77,6 +80,8 @@ public final class PlatformBridge {
                 if (connected) {
                     // Anything typed while offline is delivered as soon as we are back.
                     messages.flushOutbox();
+                    // Frames missed while the socket was down are re-read from the API.
+                    org.telegram.platform.tl.PlatformDialogsSync.refresh(0);
                 }
             }
         });

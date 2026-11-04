@@ -902,6 +902,18 @@
               "default": 0,
               "title": "Offset"
             }
+          },
+          {
+            "name": "archived",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "Archived dialogs are paged separately",
+              "default": false,
+              "title": "Archived"
+            },
+            "description": "Archived dialogs are paged separately"
           }
         ],
         "responses": {
@@ -1428,6 +1440,57 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/ChatPin"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chats/{chat_id}/archive": {
+      "post": {
+        "tags": [
+          "chats"
+        ],
+        "summary": "Archive Chat",
+        "operationId": "archive_chat_api_v1_chats__chat_id__archive_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Chat Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatArchive"
               }
             }
           }
@@ -4849,6 +4912,17 @@
         ],
         "title": "CallUpdate"
       },
+      "ChatArchive": {
+        "properties": {
+          "archived": {
+            "type": "boolean",
+            "title": "Archived",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "ChatArchive"
+      },
       "ChatCreate": {
         "properties": {
           "type": {
@@ -5062,6 +5136,11 @@
           "pinned": {
             "type": "boolean",
             "title": "Pinned",
+            "default": false
+          },
+          "archived": {
+            "type": "boolean",
+            "title": "Archived",
             "default": false
           },
           "last_message": {
