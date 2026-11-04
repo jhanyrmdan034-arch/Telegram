@@ -98,12 +98,29 @@ class UserPublic(APIModel):
     display_name: str
     bio: str | None = None
     avatar_file_id: uuid.UUID | None = None
+    # Presence is permission-filtered: both fields are cleared when the other
+    # side's privacy settings do not allow the viewer to see them.
     last_seen_at: datetime | None = None
+    is_online: bool = False
+    presence_visible: bool = True
 
 
 class UserPrivate(UserPublic):
     settings: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
+    last_seen_privacy: str = "everybody"
+    search_privacy: str = "everybody"
+
+
+class PrivacyUpdate(BaseModel):
+    last_seen_privacy: Literal["everybody", "contacts", "nobody"] | None = None
+    search_privacy: Literal["everybody", "contacts", "nobody"] | None = None
+
+
+class GlobalSearchResult(BaseModel):
+    query: str
+    users: list[UserPublic] = Field(default_factory=list)
+    chats: list[ChatOut] = Field(default_factory=list)
 
 
 class UserUpdate(BaseModel):

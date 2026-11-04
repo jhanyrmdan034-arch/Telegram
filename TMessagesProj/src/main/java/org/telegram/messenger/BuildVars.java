@@ -40,6 +40,9 @@ public class BuildVars {
 
     /** Chat screen (history, send, edit, delete, typing) served by our backend. */
     public static final boolean CHAT_FROM_PLATFORM = BuildConfig.DEBUG;
+
+    /** Contacts, profiles and global search served by our backend. */
+    public static final boolean CONTACTS_FROM_PLATFORM = BuildConfig.DEBUG;
     public static final String[][] DEV_LOGIN_ACCOUNTS = {
             {"10001", "demo_alice"},
             {"10002", "demo_bob"},

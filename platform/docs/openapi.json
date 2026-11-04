@@ -440,6 +440,52 @@
         ]
       }
     },
+    "/api/v1/users/me/privacy": {
+      "patch": {
+        "tags": [
+          "users"
+        ],
+        "summary": "Update Privacy",
+        "operationId": "update_privacy_api_v1_users_me_privacy_patch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivacyUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPrivate"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/users/search": {
       "get": {
         "tags": [
@@ -1698,6 +1744,23 @@
                 }
               ],
               "title": "Before Seq"
+            }
+          },
+          {
+            "name": "after_seq",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Seq"
             }
           },
           {
@@ -4637,6 +4700,67 @@
         ]
       }
     },
+    "/api/v1/search": {
+      "get": {
+        "tags": [
+          "search"
+        ],
+        "summary": "Global Search",
+        "operationId": "global_search_api_v1_search_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64,
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalSearchResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/healthz": {
       "get": {
         "tags": [
@@ -5670,6 +5794,33 @@
         ],
         "title": "ForwardRequest"
       },
+      "GlobalSearchResult": {
+        "properties": {
+          "query": {
+            "type": "string",
+            "title": "Query"
+          },
+          "users": {
+            "items": {
+              "$ref": "#/components/schemas/UserPublic"
+            },
+            "type": "array",
+            "title": "Users"
+          },
+          "chats": {
+            "items": {
+              "$ref": "#/components/schemas/ChatOut"
+            },
+            "type": "array",
+            "title": "Chats"
+          }
+        },
+        "type": "object",
+        "required": [
+          "query"
+        ],
+        "title": "GlobalSearchResult"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -6119,6 +6270,44 @@
           "code"
         ],
         "title": "OtpVerifyRequest"
+      },
+      "PrivacyUpdate": {
+        "properties": {
+          "last_seen_privacy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "everybody",
+                  "contacts",
+                  "nobody"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen Privacy"
+          },
+          "search_privacy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "everybody",
+                  "contacts",
+                  "nobody"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Search Privacy"
+          }
+        },
+        "type": "object",
+        "title": "PrivacyUpdate"
       },
       "PublicConfig": {
         "properties": {
@@ -6983,6 +7172,16 @@
             ],
             "title": "Last Seen At"
           },
+          "is_online": {
+            "type": "boolean",
+            "title": "Is Online",
+            "default": false
+          },
+          "presence_visible": {
+            "type": "boolean",
+            "title": "Presence Visible",
+            "default": true
+          },
           "settings": {
             "additionalProperties": true,
             "type": "object",
@@ -6992,6 +7191,16 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "last_seen_privacy": {
+            "type": "string",
+            "title": "Last Seen Privacy",
+            "default": "everybody"
+          },
+          "search_privacy": {
+            "type": "string",
+            "title": "Search Privacy",
+            "default": "everybody"
           }
         },
         "type": "object",
@@ -7052,6 +7261,16 @@
               }
             ],
             "title": "Last Seen At"
+          },
+          "is_online": {
+            "type": "boolean",
+            "title": "Is Online",
+            "default": false
+          },
+          "presence_visible": {
+            "type": "boolean",
+            "title": "Presence Visible",
+            "default": true
           }
         },
         "type": "object",

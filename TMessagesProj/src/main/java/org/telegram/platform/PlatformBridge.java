@@ -48,6 +48,7 @@ public final class PlatformBridge {
     private final DtoMapper mapper;
     private final ChatRepository chats;
     private final MessageRepository messages;
+    private final org.telegram.platform.repo.UserRepository users;
     private final ExecutorService executor = Executors.newFixedThreadPool(3, r -> {
         Thread thread = new Thread(r, "platform-io");
         thread.setDaemon(true);
@@ -65,6 +66,7 @@ public final class PlatformBridge {
         this.mapper = new DtoMapper(idMapper);
         this.chats = new ChatRepository(api, localStore, executor);
         this.messages = new MessageRepository(api, localStore, realtime, executor);
+        this.users = new org.telegram.platform.repo.UserRepository(api, executor);
 
         realtime.setListener(new RealtimeClient.EventListener() {
             @Override
@@ -74,6 +76,9 @@ public final class PlatformBridge {
                 // read receipts: no restart, no pull-to-refresh needed.
                 org.telegram.platform.tl.PlatformDialogsSync.onRealtimeEvent(0, type, data);
                 org.telegram.platform.tl.PlatformChatSync.onRealtimeEvent(type, data);
+                if ("profile.updated".equals(type)) {
+                    org.telegram.platform.tl.PlatformContactsSync.onProfileUpdated(data);
+                }
             }
 
             @Override
@@ -163,6 +168,10 @@ public final class PlatformBridge {
 
     public ChatRepository chats() {
         return chats;
+    }
+
+    public org.telegram.platform.repo.UserRepository users() {
+        return users;
     }
 
     public MessageRepository messages() {

@@ -217,6 +217,7 @@ public final class PlatformChatSync {
         final boolean jump = jumpToMessage;
         NotificationCenter.getGlobalInstance()
                 .postNotificationName(NotificationCenter.chatSearchResultsLoading, finalGuid);
+        final int pageLimit = 50;
         PlatformBridge.get().messages().search(chatId, query.trim(),
                 new Callback<List<JsonObject>>() {
                     @Override
@@ -224,6 +225,10 @@ public final class PlatformChatSync {
                         final List<JsonObject> results = rows;
                         AndroidUtilities.runOnUIThread(() -> {
                             int index = 0;
+                            // getMask(): bit 1 = more results ahead, bit 2 = something
+                            // to navigate back to. The old code always sent 0, which told
+                            // the bar there was nothing to jump to.
+                            boolean more = results.size() >= pageLimit;
                             for (JsonObject row : results) {
                                 String id = optString(row, "id");
                                 if (id == null) {
@@ -231,9 +236,10 @@ public final class PlatformChatSync {
                                 }
                                 int messageId = PlatformBridge.get().ids().toInt(id);
                                 index++;
+                                int mask = (more ? 1 : 0) | (index > 0 ? 2 : 0);
                                 NotificationCenter.getGlobalInstance().postNotificationName(
                                         NotificationCenter.chatSearchResultsAvailable, finalGuid,
-                                        messageId, 0, dialogId, index, results.size(), jump);
+                                        messageId, mask, dialogId, index, results.size(), jump);
                             }
                             if (results.isEmpty()) {
                                 NotificationCenter.getGlobalInstance().postNotificationName(

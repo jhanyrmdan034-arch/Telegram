@@ -9,7 +9,14 @@ from fastapi import HTTPException, Request, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .models import AuditLog, Chat, ChatMember, Message, User
+from .models import (
+    AuditLog,
+    Chat,
+    ChatMember,
+    Contact,
+    Message,
+    User,
+)
 from .runtime import Runtime
 
 # --------------------------------------------------------------------------- #
@@ -210,6 +217,39 @@ async def presence_recipients(db: AsyncSession, user_id: uuid.UUID) -> list[uuid
     return list(rows)
 
 
+async def is_contact(db: AsyncSession, owner_id: uuid.UUID, target_id: uuid.UUID) -> bool:
+    row = (await db.execute(
+        select(Contact.id).where(Contact.owner_id == owner_id, Contact.contact_id == target_id)
+    )).first()
+    return row is not None
+
+
+def presence_allowed(privacy: str, viewer_is_contact: bool) -> bool:
+    if privacy == "nobody":
+        return False
+    if privacy == "contacts":
+        return viewer_is_contact
+    return True
+
+
+async def user_public(db: AsyncSession, target, viewer_id: uuid.UUID,
+                      online_ids: set[uuid.UUID] | None = None) -> dict:
+    """One user as the viewer may see them: presence follows the privacy setting."""
+    contact = await is_contact(db, target.id, viewer_id) or await is_contact(db, viewer_id, target.id)
+    allowed = presence_allowed(target.last_seen_privacy, contact)
+    online = bool(online_ids and target.id in online_ids)
+    return {
+        "id": target.id,
+        "username": target.username,
+        "display_name": target.display_name,
+        "bio": target.bio,
+        "avatar_file_id": target.avatar_file_id,
+        "last_seen_at": target.last_seen_at if allowed else None,
+        "is_online": online if allowed else False,
+        "presence_visible": allowed,
+    }
+
+
 async def bulk_private_peers(db: AsyncSession, chat_ids: list[uuid.UUID],
                              viewer_id: uuid.UUID) -> dict[uuid.UUID, dict]:
     """Peer summary for private/saved chats so the client can render avatar + title."""
@@ -230,8 +270,12 @@ async def bulk_private_peers(db: AsyncSession, chat_ids: list[uuid.UUID],
             "username": user.username,
             "display_name": user.display_name,
             "avatar_file_id": str(user.avatar_file_id) if user.avatar_file_id else None,
-            "last_seen_at": user.last_seen_at.isoformat() if user.last_seen_at else None,
-            "is_online": False,  # filled in by the caller that has the connection registry
+            # chats imply a relationship, so presence follows the same policy but
+            # never leaks to someone the settings hide it from.
+            "last_seen_at": (user.last_seen_at.isoformat()
+                             if user.last_seen_at and user.last_seen_privacy != "nobody" else None),
+            "is_online": user.last_seen_privacy == "everybody",
+            "presence_visible": user.last_seen_privacy != "nobody",
         }
         for chat_id, user in rows
     }

@@ -18,8 +18,8 @@ from .models import AppSetting, ErrorLog
 from .ratelimit import client_ip
 from .devlogin import dev_login_enabled, ensure_demo_accounts
 from .routers import (
-    admin, auth, calls, chats, contacts, files, folders, health, messages, meta, support,
-    users, ws,
+    admin, auth, calls, chats, contacts, files, folders, health, messages, meta, search,
+    support, users, ws,
 )
 from .runtime import build_runtime
 
@@ -154,6 +154,7 @@ def create_app(settings: Settings | None = None, engine=None) -> FastAPI:
                    files.router, calls.router, folders.router, support.router, meta.router,
                    admin.router):
         app.include_router(router, prefix=api_prefix)
+    app.include_router(search.router, prefix=api_prefix)
     app.include_router(health.router, prefix=api_prefix)
     app.include_router(ws.router, prefix=api_prefix)
 

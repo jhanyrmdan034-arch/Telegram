@@ -14,7 +14,8 @@ JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram"
 
 MT_PROTO = ("sendRequest", "ConnectionsManager", "getMessagesStorage(", "MessagesStorage.getInstance",
             "TLRPC.TL_messages_")
-GUARD = ("PlatformChatSync.isEnabled()", "PlatformDialogsSync.isEnabled()")
+GUARD = ("PlatformChatSync.isEnabled()", "PlatformDialogsSync.isEnabled()",
+         "PlatformContactsSync.isEnabled()")
 
 SEAMS = [
     ("ui/DialogsActivity.java", "public static void loadDialogs(AccountInstance accountInstance)", "dialog list load"),
@@ -40,6 +41,12 @@ SEAMS = [
      "public boolean pinDialog(long dialogId, boolean pin, TLRPC.InputPeer peer, long taskId)", "pin"),
     ("messenger/MessagesController.java",
      "public int addDialogToFolder(long dialogId, int folderId, int pinnedNum, long taskId)", "archive"),
+    ("messenger/ContactsController.java",
+     "public void loadContacts(boolean fromCache, final long hash)", "contacts load"),
+    ("messenger/MessagesController.java",
+     "public void loadFullUser(final TLRPC.User user, int classGuid, boolean force)", "profile load"),
+    ("ui/Adapters/SearchAdapter.java",
+     "public void searchDialogs(final String query)", "global search"),
 ]
 
 

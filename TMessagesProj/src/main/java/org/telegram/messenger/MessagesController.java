@@ -7772,6 +7772,10 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void loadFullUser(final TLRPC.User user, int classGuid, boolean force) {
+        if (org.telegram.platform.tl.PlatformContactsSync.isEnabled()) {
+            org.telegram.platform.tl.PlatformContactsSync.loadProfile(currentAccount, user, classGuid);
+            return;
+        }
         loadFullUser(user, classGuid, force, null);
     }
     public void loadFullUser(final TLRPC.User user, int classGuid, boolean force, Utilities.Callback<TLRPC.UserFull> whenReceivedFullUser) {

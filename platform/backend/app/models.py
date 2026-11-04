@@ -50,6 +50,13 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(128), nullable=False)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     bio: Mapped[str | None] = mapped_column(Text)
+    # Who may see presence and who may be found by search (everybody|contacts|nobody).
+    last_seen_privacy: Mapped[str] = mapped_column(
+        String(16), default="everybody", server_default="everybody", nullable=False
+    )
+    search_privacy: Mapped[str] = mapped_column(
+        String(16), default="everybody", server_default="everybody", nullable=False
+    )
     # Created with use_alter because users and files reference each other.
     avatar_file_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
