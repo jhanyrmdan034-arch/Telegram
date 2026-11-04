@@ -73,6 +73,7 @@ public final class PlatformBridge {
                 // The dialog list refreshes itself on new messages, presence and
                 // read receipts: no restart, no pull-to-refresh needed.
                 org.telegram.platform.tl.PlatformDialogsSync.onRealtimeEvent(0, type, data);
+                org.telegram.platform.tl.PlatformChatSync.onRealtimeEvent(type, data);
             }
 
             @Override
@@ -82,6 +83,8 @@ public final class PlatformBridge {
                     messages.flushOutbox();
                     // Frames missed while the socket was down are re-read from the API.
                     org.telegram.platform.tl.PlatformDialogsSync.refresh(0);
+                    org.telegram.platform.tl.PlatformChatSync.syncSinceLastSeen(
+                            org.telegram.platform.tl.PlatformChatSync.getActiveDialog(), 0, 0);
                 }
             }
         });

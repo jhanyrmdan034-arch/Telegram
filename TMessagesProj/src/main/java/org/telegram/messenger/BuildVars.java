@@ -37,6 +37,9 @@ public class BuildVars {
      * Debug builds only: a release build keeps the original data path.
      */
     public static final boolean DIALOGS_FROM_PLATFORM = BuildConfig.DEBUG;
+
+    /** Chat screen (history, send, edit, delete, typing) served by our backend. */
+    public static final boolean CHAT_FROM_PLATFORM = BuildConfig.DEBUG;
     public static final String[][] DEV_LOGIN_ACCOUNTS = {
             {"10001", "demo_alice"},
             {"10002", "demo_bob"},

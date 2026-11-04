@@ -4422,7 +4422,21 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         });
     }
 
+    private static boolean isPlainText(SendMessageParams params) {
+        return params != null && params.message != null && !params.message.isEmpty()
+                && params.photo == null && params.document == null && params.location == null
+                && params.game == null && params.poll == null && params.todo == null
+                && params.invoice == null && params.path == null && params.mediaWebPage == null;
+    }
+
     public void sendMessage(SendMessageParams sendMessageParams) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled() && isPlainText(sendMessageParams)) {
+            // Text goes to our backend; media still follows the original path
+            // until the media phase.
+            org.telegram.platform.tl.PlatformChatSync.sendText(sendMessageParams.peer,
+                    sendMessageParams.message, sendMessageParams.replyToMsg);
+            return;
+        }
         final SendMessageChatArguments sendMessageChatArguments = sendMessageParams.sendMessageChatArguments != null ?
                 sendMessageParams.sendMessageChatArguments : SendMessageChatArguments.EMPTY;
         String message = sendMessageParams.message;

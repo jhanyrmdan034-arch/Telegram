@@ -46,6 +46,19 @@ async def send_message(chat_id: uuid.UUID, payload: MessageCreate, user: Current
         if replied is None or replied.chat_id != chat_id:
             raise HTTPException(status_code=404, detail="Replied message not found in this chat")
 
+    if payload.client_message_id:
+        # A retry after a dropped connection re-sends the same client id; return the
+        # message that already exists instead of duplicating the bubble.
+        existing = (await db.execute(
+            select(Message).where(
+                Message.chat_id == chat_id,
+                Message.deleted_at.is_(None),
+                Message.meta["client_message_id"].astext == payload.client_message_id,
+            )
+        )).scalars().first()
+        if existing is not None:
+            return existing
+
     seq = await next_chat_seq(db, chat_id)
     message = Message(
         chat_id=chat_id,
@@ -75,6 +88,7 @@ async def get_messages(
     user: CurrentUser,
     db: DbDep,
     before_seq: int | None = Query(default=None, ge=1),
+    after_seq: int | None = Query(default=None, ge=0),
     limit: int = Query(default=50, ge=1, le=200),
 ):
     await require_membership(db, chat_id, user.id)
@@ -86,12 +100,22 @@ async def get_messages(
     )
     if before_seq is not None:
         stmt = stmt.where(Message.seq < before_seq)
+    if after_seq is not None:
+        # Forward paging: used to fill the gap after the socket reconnects.
+        stmt = (
+            select(Message)
+            .where(Message.chat_id == chat_id, Message.deleted_at.is_(None),
+                   Message.seq > after_seq)
+            .order_by(Message.seq.asc())
+            .limit(limit)
+        )
     result = await db.execute(stmt)
     rows = list(result.scalars())
     has_more = len(rows) > limit
     rows = rows[:limit]
-    items = [MessageOut.model_validate(m) for m in reversed(rows)]
-    next_before = rows[-1].seq if has_more and rows else None
+    ordered = rows if after_seq is not None else list(reversed(rows))
+    items = [MessageOut.model_validate(m) for m in ordered]
+    next_before = rows[-1].seq if has_more and rows and after_seq is None else None
     return MessagePage(items=items, next_before_seq=next_before)
 
 

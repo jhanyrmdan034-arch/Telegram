@@ -9309,6 +9309,10 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void deleteMessages(ArrayList<Integer> messages, ArrayList<Long> randoms, TLRPC.EncryptedChat encryptedChat, long dialogId, boolean forAll, int mode, boolean cacheOnly, long taskId, TLObject taskRequest, int topicId, boolean movedToScheduled, int movedToScheduledMessageId) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled()) {
+            org.telegram.platform.tl.PlatformChatSync.deleteMessages(dialogId, messages, forAll);
+            return;
+        }
         final boolean scheduled = mode == ChatActivity.MODE_SCHEDULED;
         final boolean quickReplies = mode == ChatActivity.MODE_QUICK_REPLIES;
         final boolean welcomeMessages = mode == ChatActivity.MODE_WELCOME_MESSAGES;
@@ -11516,6 +11520,12 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void loadMessages(long dialogId, long mergeDialogId, boolean loadInfo, int count, int max_id, int offset_date, boolean fromCache, int midDate, int classGuid, int load_type, int last_message_id, int mode, long threadMessageId, int loadIndex, int first_unread, int unread_count, int last_date, boolean queryFromServer, int mentionsCount, boolean isTopic) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled()) {
+            // History comes from our own backend; ChatActivity still receives the
+            // same messagesDidLoad notification it always did.
+            org.telegram.platform.tl.PlatformChatSync.loadHistory(dialogId, count, classGuid, loadIndex);
+            return;
+        }
         loadMessagesInternal(dialogId, mergeDialogId, loadInfo, count, max_id, offset_date, fromCache, midDate, classGuid, load_type, last_message_id, mode, threadMessageId, loadIndex, first_unread, unread_count, last_date, queryFromServer, mentionsCount, true, true, isTopic, null, 0L);
     }
 

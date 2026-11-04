@@ -91,6 +91,22 @@ public final class MessageRepository {
         });
     }
 
+    /** Forward page used to catch up after the socket reconnects. */
+    public void loadHistoryAfter(final String chatId, final int afterSeq, final int limit,
+                                 final Callback<JsonObject> callback) {
+        executor.execute(() -> {
+            try {
+                Map<String, String> params = new HashMap<>();
+                params.put("after_seq", String.valueOf(afterSeq));
+                params.put("limit", String.valueOf(limit));
+                callback.onSuccess(api.getObject(PlatformApi.API_PREFIX + "/chats/" + chatId
+                        + "/messages", params));
+            } catch (PlatformException e) {
+                callback.onError(e);
+            }
+        });
+    }
+
     public void search(final String chatId, final String query,
                        final Callback<List<JsonObject>> callback) {
         executor.execute(() -> {
@@ -167,7 +183,7 @@ public final class MessageRepository {
                        final Callback<Void> callback) {
         executor.execute(() -> {
             try {
-                api.delete(PlatformApi.API_PREFIX + "/chats/" + chatId + "/messages/" + messageId
+                api.delete(PlatformApi.API_PREFIX + "/messages/" + messageId
                         + "?for_everyone=" + forEveryone);
                 store.markMessageDeleted(chatId, messageId);
                 callback.onSuccess(null);
