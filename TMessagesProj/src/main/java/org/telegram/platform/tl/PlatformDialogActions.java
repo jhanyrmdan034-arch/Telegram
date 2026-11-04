@@ -19,7 +19,16 @@ public final class PlatformDialogActions {
     private PlatformDialogActions() {
     }
 
+    /**
+     * Resolves a dialog id to the backend chat id. Rows installed by the sync know
+     * their chat id directly, which also covers private dialogs where the dialog id
+     * is the peer's user id and would otherwise map to the wrong object.
+     */
     private static String backendId(long dialogId) {
+        String known = PlatformDialogsSync.chatUuidFor(dialogId);
+        if (known != null) {
+            return known;
+        }
         long id = dialogId < 0 ? -dialogId : dialogId;
         return PlatformBridge.get().ids().toUuid(id);
     }

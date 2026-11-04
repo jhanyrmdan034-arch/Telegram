@@ -40,6 +40,9 @@ public final class PlatformDialogsSync {
     private static final int PAGE_SIZE = 100;
     private static final int MAX_ROWS = 500;
 
+    /** Dialog id -> backend chat id, so actions can address the right row. */
+    private static final Map<Long, String> CHAT_IDS = new java.util.concurrent.ConcurrentHashMap<>();
+
     private PlatformDialogsSync() {
     }
 
@@ -118,6 +121,7 @@ public final class PlatformDialogsSync {
             final long dialogId = bridge.mapper().dialogIdFor(row);
             if (backendId != null) {
                 backendChatIds.put(dialogId, backendId);
+                CHAT_IDS.put(dialogId, backendId);
             }
 
             if ("private".equals(type) || "saved".equals(type)) {
@@ -150,7 +154,7 @@ public final class PlatformDialogsSync {
             }
             dialogs.add(dialog);
 
-            MessageObject preview = buildPreview(account, bridge, row, dialogId);
+            MessageObject preview = buildPreview(account, bridge, row, dialogId, ownUserId(account));
             if (preview != null) {
                 dialog.top_message = preview.getId();
                 dialog.last_message_date = preview.messageOwner.date;
@@ -206,6 +210,12 @@ public final class PlatformDialogsSync {
             return;
         }
         final PlatformBridge bridge = PlatformBridge.get();
+        // Backend chat id -> dialog id for every row, private ones included: a
+        // folder may contain a contact, not only a group or channel.
+        Map<String, Long> dialogByChatId = new HashMap<>();
+        for (Map.Entry<Long, String> entry : backendChatIds.entrySet()) {
+            dialogByChatId.put(entry.getValue(), entry.getKey());
+        }
         ArrayList<MessagesController.DialogFilter> filters = controller.getDialogFilters();
         filters.clear();
 
@@ -227,8 +237,8 @@ public final class PlatformDialogsSync {
                     if (idElement.isJsonNull()) {
                         continue;
                     }
-                    long mapped = bridge.ids().toLong(idElement.getAsString());
-                    long dialogId = -mapped;
+                    Long known = dialogByChatId.get(idElement.getAsString());
+                    long dialogId = known != null ? known : -bridge.ids().toLong(idElement.getAsString());
                     for (int i = 0; i < all.size(); i++) {
                         if (all.get(i).id == dialogId) {
                             subset.add(all.get(i));
@@ -245,14 +255,28 @@ public final class PlatformDialogsSync {
         FileLog.d("platform dialogs: " + filters.size() + " folder tabs");
     }
 
+    /** The mapped id of the signed-in user, so previews can say "You:". */
+    private static long ownUserId(int account) {
+        try {
+            TLRPC.User self = AccountInstance.getInstance(account).getUserConfig().getCurrentUser();
+            return self == null ? 0 : self.id;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
     private static MessageObject buildPreview(int account, PlatformBridge bridge, JsonObject row,
-                                              long dialogId) {
+                                              long dialogId, long ownId) {
         if (!row.has("last_message") || !row.get("last_message").isJsonObject()) {
             return null;
         }
         try {
             JsonObject last = row.getAsJsonObject("last_message");
-            TLRPC.TL_message message = bridge.mapper().toMessage(last, dialogId, false);
+            boolean out = false;
+            if (ownId != 0 && last.has("sender_id") && !last.get("sender_id").isJsonNull()) {
+                out = bridge.ids().toLong(last.get("sender_id").getAsString()) == ownId;
+            }
+            TLRPC.TL_message message = bridge.mapper().toMessage(last, dialogId, out);
             if (message == null) {
                 return null;
             }
@@ -283,6 +307,11 @@ public final class PlatformDialogsSync {
             default:
                 break;
         }
+    }
+
+    /** The backend chat id behind a dialog, or {@code null} when it is unknown. */
+    public static String chatUuidFor(long dialogId) {
+        return CHAT_IDS.get(dialogId);
     }
 
     private static TLRPC.Peer peerFor(String type, long dialogId) {

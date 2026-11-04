@@ -4,7 +4,8 @@ from __future__ import annotations
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, File as FormFile, Form, HTTPException, UploadFile, status
+from fastapi import (APIRouter, File as FormFile, Form, HTTPException, Request,
+                     Response, UploadFile, status)
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 
@@ -82,12 +83,18 @@ async def file_metadata(file_id: uuid.UUID, user: CurrentUser, db: DbDep, runtim
 
 
 @router.get("/{file_id}/content")
-async def download_file(file_id: uuid.UUID, user: CurrentUser, db: DbDep, runtime: RuntimeDep):
+async def download_file(file_id: uuid.UUID, request: Request, user: CurrentUser,
+                        db: DbDep, runtime: RuntimeDep):
     record = await db.get(File, file_id)
     if record is None:
         raise HTTPException(status_code=404, detail="File not found")
     if not await _can_access(db, record, user.id):
         raise HTTPException(status_code=403, detail="Access denied")
+
+    etag = f'"{record.sha256}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED,
+                        headers={"ETag": etag, "Cache-Control": "private, max-age=0, must-revalidate"})
 
     path = runtime.storage.path_for(record.storage_key)
     if not path.exists():
@@ -98,7 +105,11 @@ async def download_file(file_id: uuid.UUID, user: CurrentUser, db: DbDep, runtim
         headers={
             "Content-Length": str(record.size),
             "Content-Disposition": f'inline; filename="{record.name}"',
-            "Cache-Control": "private, max-age=3600",
+            # The digest is the version: a re-upload is a new file, a new sha256
+            # and therefore a new ETag, so clients can revalidate instead of
+            # re-downloading avatars on every list refresh.
+            "ETag": etag,
+            "Cache-Control": "private, max-age=0, must-revalidate",
         },
     )
 

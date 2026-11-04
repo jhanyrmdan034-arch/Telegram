@@ -47,8 +47,22 @@ public final class PlatformAvatars {
     public static void remember(long dialogId, String avatarFileId) {
         if (avatarFileId == null || avatarFileId.isEmpty()) {
             FILE_ID_BY_DIALOG.remove(dialogId);
-        } else {
-            FILE_ID_BY_DIALOG.put(dialogId, avatarFileId);
+            return;
+        }
+        String previous = FILE_ID_BY_DIALOG.put(dialogId, avatarFileId);
+        if (previous != null && !previous.equals(avatarFileId)) {
+            // A new upload gets a new file id; the old picture must not linger.
+            BITMAPS.remove(previous);
+            File stale = fileFor(previous);
+            if (stale.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                stale.delete();
+            }
+            File staleEtag = new File(stale.getAbsolutePath() + ".etag");
+            if (staleEtag.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                staleEtag.delete();
+            }
         }
     }
 

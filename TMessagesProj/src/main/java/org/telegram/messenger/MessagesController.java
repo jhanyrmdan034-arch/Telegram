@@ -9991,6 +9991,16 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void deleteDialog(final long did, int onlyHistory, boolean revoke) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            if (DialogObject.isUserDialog(did)) {
+                // A private dialog has no delete on the server: hide it (Telegram's
+                // own semantics), which the backend models as archive.
+                org.telegram.platform.tl.PlatformDialogActions.setArchived(did, true, null);
+            } else {
+                org.telegram.platform.tl.PlatformDialogActions.delete(did, null);
+            }
+            return;
+        }
         deleteDialog(did, 1, onlyHistory, 0, revoke, null, 0);
     }
 
@@ -12363,6 +12373,11 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public int addDialogToFolder(long dialogId, int folderId, int pinnedNum, long taskId) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            // folderId 1 is the archive folder in Telegram's own numbering.
+            org.telegram.platform.tl.PlatformDialogActions.setArchived(dialogId, folderId == 1, null);
+            return 0;
+        }
         ArrayList<Long> arrayList = new ArrayList<>(1);
         arrayList.add(dialogId);
         return addDialogToFolder(arrayList, folderId, pinnedNum, null, taskId);
@@ -14669,6 +14684,11 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void markDialogAsRead(long dialogId, int maxPositiveId, int maxNegativeId, int maxDate, boolean popup, long threadId, int countDiff, boolean readNow, int scheduledCount) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            // The unread counter is owned by the backend; send a real read receipt.
+            org.telegram.platform.tl.PlatformDialogActions.markRead(dialogId, Math.max(0, maxPositiveId), null);
+            return;
+        }
         boolean createReadTask;
 
         if (threadId != 0) {
@@ -17278,6 +17298,11 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean pinDialog(long dialogId, boolean pin, TLRPC.InputPeer peer, long taskId) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            // Pin state lives in our backend; every entry point (menu, swipe) lands here.
+            org.telegram.platform.tl.PlatformDialogActions.setPinned(dialogId, pin, null);
+            return true;
+        }
         TLRPC.Dialog dialog = dialogs_dict.get(dialogId);
         if (dialog == null || dialog.pinned == pin) {
             return dialog != null;
