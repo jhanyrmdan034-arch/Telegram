@@ -3,3 +3,4 @@ __pycache__/
 mtserver.db
 server_key.pem
 venv/
+files/
