@@ -31,6 +31,12 @@ public class BuildVars {
      * builds, and the backend refuses the endpoint entirely outside development.
      */
     public static final boolean DEV_LOGIN_ENABLED = BuildConfig.DEBUG;
+
+    /**
+     * Load the dialog list from the proprietary backend instead of MTProto.
+     * Debug builds only: a release build keeps the original data path.
+     */
+    public static final boolean DIALOGS_FROM_PLATFORM = BuildConfig.DEBUG;
     public static final String[][] DEV_LOGIN_ACCOUNTS = {
             {"10001", "demo_alice"},
             {"10002", "demo_bob"},

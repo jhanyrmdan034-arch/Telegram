@@ -191,7 +191,7 @@ public final class DtoMapper {
     }
 
     /** Parses ISO-8601 timestamps emitted by the API; falls back to "now". */
-    static int parseUnix(String iso) {
+    public static int parseUnix(String iso) {
         if (iso == null) {
             return (int) (System.currentTimeMillis() / 1000L);
         }

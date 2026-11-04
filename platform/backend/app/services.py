@@ -193,6 +193,22 @@ async def bulk_last_messages(db: AsyncSession, chat_ids: list[uuid.UUID]) -> dic
     }
 
 
+async def presence_recipients(db: AsyncSession, user_id: uuid.UUID) -> list[uuid.UUID]:
+    """Everyone who shares a chat with the user, so they can see online/offline."""
+    rows = (await db.execute(
+        select(ChatMember.user_id)
+        .where(
+            ChatMember.chat_id.in_(
+                select(ChatMember.chat_id).where(ChatMember.user_id == user_id)
+            ),
+            ChatMember.user_id != user_id,
+            ChatMember.left_at.is_(None),
+        )
+        .distinct()
+    )).scalars().all()
+    return list(rows)
+
+
 async def bulk_private_peers(db: AsyncSession, chat_ids: list[uuid.UUID],
                              viewer_id: uuid.UUID) -> dict[uuid.UUID, dict]:
     """Peer summary for private/saved chats so the client can render avatar + title."""

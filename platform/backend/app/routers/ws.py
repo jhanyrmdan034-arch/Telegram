@@ -11,7 +11,7 @@ from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 
 from ..models import ChatMember, Session, User
 from ..security import decode_access_token
-from ..services import member_ids, require_membership
+from ..services import member_ids, presence_recipients, require_membership
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -39,6 +39,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
             return
 
     await runtime.manager.connect(user_id, websocket)
+    async with runtime.session_factory() as db:
+        peers = await presence_recipients(db, user_id)
+    if peers:
+        await runtime.bus.publish(peers, {
+            "type": "presence.updated",
+            "data": {"user_id": str(user_id), "online": True},
+        })
     await websocket.send_text(json.dumps({"type": "ready", "data": {"user_id": str(user_id)}}))
 
     try:
@@ -85,6 +92,10 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
                             member.last_read_seq = seq
                             await db.commit()
                         await runtime.bus.publish(recipients, {
+                            "type": "read.updated",
+                            "data": {"chat_id": str(chat_id), "user_id": str(user_id), "seq": seq},
+                        })
+                        await runtime.bus.publish(recipients, {
                             "type": "message.read",
                             "data": {"chat_id": str(chat_id), "user_id": str(user_id), "seq": seq},
                         })
@@ -99,3 +110,13 @@ async def websocket_endpoint(websocket: WebSocket, token: str = Query(...)):
         log.exception("websocket failure for user %s", user_id)
     finally:
         await runtime.manager.disconnect(user_id, websocket)
+        try:
+            async with runtime.session_factory() as db:
+                peers = await presence_recipients(db, user_id)
+            if peers:
+                await runtime.bus.publish(peers, {
+                    "type": "presence.updated",
+                    "data": {"user_id": str(user_id), "online": False},
+                })
+        except Exception:  # pragma: no cover - best effort
+            log.debug("presence publish failed", exc_info=True)

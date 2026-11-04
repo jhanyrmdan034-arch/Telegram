@@ -59,6 +59,14 @@ public final class ChatRepository {
         });
     }
 
+    /** One page of dialogs; the UI loads more while it scrolls. */
+    public com.google.gson.JsonArray dialogPage(int limit, int offset) throws PlatformException {
+        Map<String, String> params = new HashMap<>();
+        params.put("limit", String.valueOf(limit));
+        params.put("offset", String.valueOf(offset));
+        return api.getArray(PlatformApi.API_PREFIX + "/chats", params);
+    }
+
     public void pinnedChats(final Callback<List<JsonObject>> callback) {
         executor.execute(() -> {
             try {
