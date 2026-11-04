@@ -3,37 +3,54 @@ name: Build custom-backend APK
 # Builds the Telegram-Android fork (this repo) as a signed APK wired to YOUR
 # MTProto backend (server/mtserver) instead of Telegram's datacenters.
 #
-# Trigger manually with your server address:
-#   gh workflow run build-apk.yml --ref arena/b6bc4d23-telegram \
-#       -f backend_host=YOUR_SERVER_IP_OR_DOMAIN -f backend_port=8443
+# Triggers:
+#   - push to arena/b6bc4d23-telegram touching this workflow / tgnet / server deploy files
+#   - manual dispatch (GitHub UI) with backend_host/backend_port inputs
 #
-# Then download the artifact:  gh run download <run-id> -n app-afat-release
+# The backend endpoint is read from server/deploy-host.txt (committed):
+#   line 1 = host (IP or domain), line 2 = port. Edit it and push to rebuild
+#   the APK pointed at a new server.
+#
+# Output: the APK is uploaded as an Actions artifact AND committed to the repo
+# under releases/ (so it can be fetched with plain git/codeload).
 #
 # The app embeds the RSA public key of server/dev_server_key.pem, so run the
 # server with:  python3 -m mtserver.main --key server/dev_server_key.pem ...
 
 on:
+  push:
+    branches: ['arena/b6bc4d23-telegram']
+    paths:
+      - '.github/workflows/build-apk.yml'
+      - 'TMessagesProj/jni/tgnet/CustomBackendConfig.h'
+      - 'server/deploy-host.txt'
+      - 'server/dev_server_key.pem'
+      - 'server/mtserver/**'
   workflow_dispatch:
     inputs:
       backend_host:
         description: 'Backend server IP or domain the app should dial'
-        required: true
+        required: false
         default: '127.0.0.1'
       backend_port:
         description: 'Backend server port'
         required: false
         default: '8443'
 
+permissions:
+  contents: write
+
 jobs:
   build:
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
     steps:
       - name: Checkout (with submodules)
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -51,24 +68,52 @@ jobs:
             ndk;27.2.12479018
             cmake;3.22.1
 
+      - name: Resolve backend endpoint
+        id: backend
+        run: |
+          if [ -f server/deploy-host.txt ]; then
+            HOST=$(sed -n 1p server/deploy-host.txt)
+            PORT=$(sed -n 2p server/deploy-host.txt)
+          else
+            HOST="${{ inputs.backend_host || '127.0.0.1' }}"
+            PORT="${{ inputs.backend_port || '8443' }}"
+          fi
+          [ -n "$PORT" ] || PORT=8443
+          echo "host=$HOST" >> "$GITHUB_OUTPUT"
+          echo "port=$PORT" >> "$GITHUB_OUTPUT"
+          echo "backend: $HOST:$PORT"
+
       - name: Generate CustomBackendConfig.h (custom backend endpoint + RSA key)
         run: |
           python3 server/gen_client_config.py \
-            --public-host "${{ inputs.backend_host }}" \
-            --public-port "${{ inputs.backend_port }}" \
+            --public-host "${{ steps.backend.outputs.host }}" \
+            --public-port "${{ steps.backend.outputs.port }}" \
             --key server/dev_server_key.pem \
             > TMessagesProj/jni/tgnet/CustomBackendConfig.h
-          head -8 TMessagesProj/jni/tgnet/CustomBackendConfig.h
+          grep -E 'CUSTOM_BACKEND_HOST|CUSTOM_BACKEND_PORT|FINGERPRINT' TMessagesProj/jni/tgnet/CustomBackendConfig.h
 
-      - name: Build APK (afat release, signed with the dummy repo keystore)
+      - name: Build APK (afat release, signed with the repo's dummy keystore)
         run: |
           ./gradlew :TMessagesProj_App:assembleAfatRelease --no-daemon \
             -Dorg.gradle.jvmargs="-Xmx6g -XX:MaxMetaspaceSize=1g" \
             --stacktrace
 
-      - name: Upload APK artifact
+      - name: Upload APK as Actions artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-afat-release-apk
           path: TMessagesProj_App/build/outputs/apk/afat/release/app.apk
           retention-days: 7
+
+      - name: Commit APK into releases/ (fetchable via plain git)
+        run: |
+          APK=TMessagesProj_App/build/outputs/apk/afat/release/app.apk
+          mkdir -p releases
+          cp "$APK" releases/app-afat-release.apk
+          echo "backend_host=${{ steps.backend.outputs.host }}" > releases/BACKEND.txt
+          echo "backend_port=${{ steps.backend.outputs.port }}" >> releases/BACKEND.txt
+          git config user.email "actions@github.com"
+          git config user.name "github-actions"
+          git add releases/ TMessagesProj/jni/tgnet/CustomBackendConfig.h
+          git commit -m "build: APK for backend ${{ steps.backend.outputs.host }}:${{ steps.backend.outputs.port }} (${{ github.sha }})" || echo "nothing to commit"
+          git push origin HEAD:arena/b6bc4d23-telegram
