@@ -16,7 +16,10 @@ from .config import Settings, get_settings
 from .db import create_engine
 from .models import AppSetting, ErrorLog
 from .ratelimit import client_ip
-from .routers import admin, auth, calls, chats, contacts, files, health, messages, support, users, ws
+from .routers import (
+    admin, auth, calls, chats, contacts, files, folders, health, messages, meta, support,
+    users, ws,
+)
 from .runtime import build_runtime
 
 logging.basicConfig(
@@ -25,8 +28,11 @@ logging.basicConfig(
 )
 log = logging.getLogger("messenger")
 
+# During maintenance the client must still be able to authenticate and read its
+# bootstrap configuration, otherwise it can only show a blank screen.
 MAINTENANCE_EXEMPT_PREFIXES = (
     "/docs", "/redoc", "/openapi.json", "/api/v1/health", "/api/v1/admin", "/api/v1/auth",
+    "/api/v1/config",
 )
 
 
@@ -139,7 +145,8 @@ def create_app(settings: Settings | None = None, engine=None) -> FastAPI:
 
     api_prefix = "/api/v1"
     for router in (auth.router, users.router, contacts.router, chats.router, messages.router,
-                   files.router, calls.router, support.router, admin.router):
+                   files.router, calls.router, folders.router, support.router, meta.router,
+                   admin.router):
         app.include_router(router, prefix=api_prefix)
     app.include_router(health.router, prefix=api_prefix)
     app.include_router(ws.router, prefix=api_prefix)

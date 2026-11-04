@@ -60,6 +60,7 @@ def settings(database_url: str, tmp_path_factory) -> Settings:
         storage_dir=storage,
         max_file_size_bytes=1024 * 1024,
         rate_limit_enabled=False,
+        otp_debug=True,  # tests read the code from the response instead of the log
         public_base_url="http://test",
     )
 

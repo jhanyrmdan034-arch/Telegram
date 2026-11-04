@@ -47,6 +47,88 @@
         }
       }
     },
+    "/api/v1/auth/otp/request": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Request Otp",
+        "operationId": "request_otp_api_v1_auth_otp_request_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OtpChallenge"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/auth/otp/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Verify Otp",
+        "operationId": "verify_otp_api_v1_auth_otp_verify_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpVerifyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenPair"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "tags": [
@@ -808,6 +890,36 @@
         }
       }
     },
+    "/api/v1/chats/pinned": {
+      "get": {
+        "tags": [
+          "chats"
+        ],
+        "summary": "List Pinned",
+        "operationId": "list_pinned_api_v1_chats_pinned_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ChatOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Pinned Api V1 Chats Pinned Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
     "/api/v1/chats/{chat_id}": {
       "get": {
         "tags": [
@@ -1244,6 +1356,57 @@
         }
       }
     },
+    "/api/v1/chats/{chat_id}/pin": {
+      "post": {
+        "tags": [
+          "chats"
+        ],
+        "summary": "Pin Chat",
+        "operationId": "pin_chat_api_v1_chats__chat_id__pin_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Chat Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatPin"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/chats/{chat_id}/read": {
       "post": {
         "tags": [
@@ -1552,6 +1715,143 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/messages/{message_id}/forward": {
+      "post": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "Forward Message",
+        "operationId": "forward_message_api_v1_messages__message_id__forward_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "message_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Message Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForwardRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MessageOut"
+                  },
+                  "title": "Response Forward Message Api V1 Messages  Message Id  Forward Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/chats/{chat_id}/messages/search": {
+      "get": {
+        "tags": [
+          "messages"
+        ],
+        "summary": "Search Messages",
+        "operationId": "search_messages_api_v1_chats__chat_id__messages_search_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "chat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Chat Id"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "title": "Q"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MessageOut"
+                  },
+                  "title": "Response Search Messages Api V1 Chats  Chat Id  Messages Search Get"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -1997,6 +2297,285 @@
         }
       }
     },
+    "/api/v1/folders": {
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "List Folders",
+        "operationId": "list_folders_api_v1_folders_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/FolderOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Folders Api V1 Folders Get"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Create Folder",
+        "operationId": "create_folder_api_v1_folders_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/folders/{folder_id}": {
+      "patch": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Update Folder",
+        "operationId": "update_folder_api_v1_folders__folder_id__patch",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "folder_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Folder Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Delete Folder",
+        "operationId": "delete_folder_api_v1_folders__folder_id__delete",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "folder_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Folder Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/folders/{folder_id}/chats": {
+      "put": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Set Folder Chats",
+        "operationId": "set_folder_chats_api_v1_folders__folder_id__chats_put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "folder_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Folder Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FolderChatsUpdate"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FolderOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "folders"
+        ],
+        "summary": "Folder Chats",
+        "operationId": "folder_chats_api_v1_folders__folder_id__chats_get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "folder_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Folder Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ChatOut"
+                  },
+                  "title": "Response Folder Chats Api V1 Folders  Folder Id  Chats Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/reports": {
       "post": {
         "tags": [
@@ -2346,6 +2925,28 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/config": {
+      "get": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Public Config",
+        "description": "Unauthenticated: the client reads this before showing the login screen.",
+        "operationId": "public_config_api_v1_config_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicConfig"
                 }
               }
             }
@@ -4410,6 +5011,40 @@
             "type": "integer",
             "title": "Last Read Seq",
             "default": 0
+          },
+          "unread_count": {
+            "type": "integer",
+            "title": "Unread Count",
+            "default": 0
+          },
+          "pinned": {
+            "type": "boolean",
+            "title": "Pinned",
+            "default": false
+          },
+          "last_message": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Message"
+          },
+          "peer": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Peer"
           }
         },
         "type": "object",
@@ -4427,6 +5062,17 @@
           "created_at"
         ],
         "title": "ChatOut"
+      },
+      "ChatPin": {
+        "properties": {
+          "pinned": {
+            "type": "boolean",
+            "title": "Pinned",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "ChatPin"
       },
       "ChatUpdate": {
         "properties": {
@@ -4740,6 +5386,135 @@
           "sha256"
         ],
         "title": "FileOut"
+      },
+      "FolderChatsUpdate": {
+        "properties": {
+          "chat_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "title": "Chat Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chat_ids"
+        ],
+        "title": "FolderChatsUpdate"
+      },
+      "FolderCreate": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "position": {
+            "type": "integer",
+            "maximum": 1000.0,
+            "minimum": 0.0,
+            "title": "Position",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "title": "FolderCreate"
+      },
+      "FolderOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "position": {
+            "type": "integer",
+            "title": "Position"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "chat_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Chat Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "position",
+          "created_at"
+        ],
+        "title": "FolderOut"
+      },
+      "FolderUpdate": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 1000.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          }
+        },
+        "type": "object",
+        "title": "FolderUpdate"
+      },
+      "ForwardRequest": {
+        "properties": {
+          "chat_ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "minItems": 1,
+            "title": "Chat Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "chat_ids"
+        ],
+        "title": "ForwardRequest"
       },
       "HTTPValidationError": {
         "properties": {
@@ -5083,6 +5858,171 @@
           "text"
         ],
         "title": "MessageUpdate"
+      },
+      "OtpChallenge": {
+        "properties": {
+          "delivery": {
+            "type": "string",
+            "enum": [
+              "sms",
+              "log"
+            ],
+            "title": "Delivery"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          },
+          "debug_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Debug Code"
+          }
+        },
+        "type": "object",
+        "required": [
+          "delivery",
+          "expires_in"
+        ],
+        "title": "OtpChallenge"
+      },
+      "OtpRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 4,
+            "title": "Username"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "login",
+              "register"
+            ],
+            "title": "Purpose",
+            "default": "login"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username"
+        ],
+        "title": "OtpRequest"
+      },
+      "OtpVerifyRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 4,
+            "title": "Username"
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 8,
+            "minLength": 4,
+            "title": "Code"
+          },
+          "device_name": {
+            "type": "string",
+            "maxLength": 128,
+            "title": "Device Name",
+            "default": "Unknown device"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios",
+              "web",
+              "desktop"
+            ],
+            "title": "Platform",
+            "default": "android"
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "code"
+        ],
+        "title": "OtpVerifyRequest"
+      },
+      "PublicConfig": {
+        "properties": {
+          "platform": {
+            "type": "string",
+            "title": "Platform",
+            "default": "messenger"
+          },
+          "registration_enabled": {
+            "type": "boolean",
+            "title": "Registration Enabled"
+          },
+          "default_region": {
+            "type": "string",
+            "title": "Default Region",
+            "default": "global"
+          },
+          "max_file_size_bytes": {
+            "type": "integer",
+            "title": "Max File Size Bytes"
+          },
+          "max_message_length": {
+            "type": "integer",
+            "title": "Max Message Length"
+          },
+          "max_group_members": {
+            "type": "integer",
+            "title": "Max Group Members"
+          },
+          "calls_enabled": {
+            "type": "boolean",
+            "title": "Calls Enabled"
+          },
+          "stickers_enabled": {
+            "type": "boolean",
+            "title": "Stickers Enabled"
+          },
+          "maintenance": {
+            "type": "boolean",
+            "title": "Maintenance"
+          },
+          "android_min_version": {
+            "type": "string",
+            "title": "Android Min Version"
+          },
+          "android_latest_version": {
+            "type": "string",
+            "title": "Android Latest Version"
+          },
+          "otp_required": {
+            "type": "boolean",
+            "title": "Otp Required"
+          }
+        },
+        "type": "object",
+        "required": [
+          "registration_enabled",
+          "max_file_size_bytes",
+          "max_message_length",
+          "max_group_members",
+          "calls_enabled",
+          "stickers_enabled",
+          "maintenance",
+          "android_min_version",
+          "android_latest_version",
+          "otp_required"
+        ],
+        "title": "PublicConfig",
+        "description": "Served to unauthenticated clients so the UI can bootstrap before login."
       },
       "RefreshRequest": {
         "properties": {

@@ -1,17 +1,24 @@
 """Authentication: registration, login, refresh-token rotation, session management."""
 from __future__ import annotations
 
+import hashlib
+import hmac
+import secrets
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from ..deps import CurrentUser, DbDep, RuntimeDep
-from ..models import Device, SecurityEvent, Session as DeviceSession, User
+from ..models import Device, OtpCode, SecurityEvent, Session as DeviceSession, User
 from ..ratelimit import client_ip
+from ..notifications import build_sms_sender
 from ..schemas import (
     LoginRequest,
+    OtpChallenge,
+    OtpRequest,
+    OtpVerifyRequest,
     RefreshRequest,
     RegisterRequest,
     SessionOut,
@@ -28,6 +35,11 @@ from ..security import (
 )
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _otp_digest(secret: str, username: str, code: str) -> str:
+    """Codes are stored as HMAC digests — a database leak must not reveal valid codes."""
+    return hmac.new(secret.encode(), f"{username}:{code}".encode(), hashlib.sha256).hexdigest()
 
 
 def _user_agent(request: Request) -> str | None:
@@ -112,6 +124,91 @@ async def register(payload: RegisterRequest, request: Request, db: DbDep, runtim
     device = await _get_or_create_device(db, user.id, payload.device_name, payload.platform)
     tokens, _ = await _issue_tokens(db, runtime, user, device, request)
     await _security_event(db, user.id, "account.registered", request)
+    return tokens
+
+
+@router.post("/otp/request", response_model=OtpChallenge, status_code=202)
+async def request_otp(payload: OtpRequest, request: Request, db: DbDep, runtime: RuntimeDep):
+    await runtime.login_limiter.enforce(f"otp:{client_ip(request)}:{payload.username}")
+
+    user = (await db.execute(select(User).where(User.username == payload.username))).scalar_one_or_none()
+    if payload.purpose == "login" and user is None:
+        # Explicit rather than silent: the client shows "account not found" and
+        # offers the registration screen instead of hanging on an SMS that never comes.
+        raise HTTPException(status_code=404, detail="Account not found")
+    if user is not None and user.is_blocked:
+        raise HTTPException(status_code=403, detail="Account is blocked")
+
+    now = datetime.now(UTC)
+    # Invalidate any outstanding code so only the newest one can be used.
+    await db.execute(
+        update(OtpCode)
+        .where(OtpCode.username == payload.username, OtpCode.consumed_at.is_(None))
+        .values(consumed_at=now)
+    )
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    record = OtpCode(
+        username=payload.username,
+        code_hash=_otp_digest(runtime.settings.jwt_secret, payload.username, code),
+        purpose=payload.purpose,
+        expires_at=now + timedelta(seconds=runtime.settings.otp_ttl_seconds),
+    )
+    db.add(record)
+    await db.commit()
+
+    sender = build_sms_sender(runtime.settings.sms_provider)
+    await sender.send(payload.username, f"Messenger verification code: {code}")
+    await _security_event(db, user.id if user else None, "auth.otp_requested", request,
+                          {"purpose": payload.purpose})
+
+    return OtpChallenge(
+        delivery="log" if sender.name == "log" else "sms",
+        expires_in=runtime.settings.otp_ttl_seconds,
+        debug_code=code if runtime.settings.otp_debug else None,
+    )
+
+
+@router.post("/otp/verify", response_model=TokenPair)
+async def verify_otp(payload: OtpVerifyRequest, request: Request, db: DbDep,
+                     runtime: RuntimeDep):
+    await runtime.login_limiter.enforce(f"otp-verify:{client_ip(request)}:{payload.username}")
+    now = datetime.now(UTC)
+
+    record = (await db.execute(
+        select(OtpCode)
+        .where(
+            OtpCode.username == payload.username,
+            OtpCode.consumed_at.is_(None),
+            OtpCode.expires_at > now,
+        )
+        .order_by(OtpCode.created_at.desc())
+    )).scalars().first()
+
+    if record is None:
+        raise HTTPException(status_code=401, detail="Code expired, request a new one")
+    if record.attempts >= runtime.settings.otp_max_attempts:
+        raise HTTPException(status_code=429, detail="Too many incorrect attempts")
+
+    expected = _otp_digest(runtime.settings.jwt_secret, payload.username, payload.code)
+    if not hmac.compare_digest(record.code_hash, expected):
+        record.attempts += 1
+        await db.commit()
+        raise HTTPException(status_code=401, detail="Incorrect code")
+
+    record.consumed_at = now
+    await db.commit()
+
+    user = (await db.execute(select(User).where(User.username == payload.username))).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail="Complete registration to continue")
+    if user.is_blocked:
+        raise HTTPException(status_code=403, detail="Account is blocked")
+
+    device = await _get_or_create_device(db, user.id, payload.device_name, payload.platform)
+    tokens, _ = await _issue_tokens(db, runtime, user, device, request)
+    await _security_event(db, user.id, "auth.otp_login", request,
+                          {"device": payload.device_name})
     return tokens
 
 

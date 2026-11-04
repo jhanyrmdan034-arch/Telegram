@@ -135,7 +135,16 @@ def message_payload(message: Message) -> dict[str, Any]:
     }
 
 
-def chat_payload(chat: Chat, member: ChatMember | None = None) -> dict[str, Any]:
+def chat_payload(
+    chat: Chat,
+    member: ChatMember | None = None,
+    *,
+    last_message: dict[str, Any] | None = None,
+    peer: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    unread = 0
+    if member is not None:
+        unread = max(0, chat.last_seq - member.last_read_seq)
     return {
         "id": str(chat.id),
         "type": chat.type,
@@ -150,6 +159,64 @@ def chat_payload(chat: Chat, member: ChatMember | None = None) -> dict[str, Any]
         "created_at": chat.created_at.isoformat() if chat.created_at else None,
         "my_role": member.role if member else None,
         "last_read_seq": member.last_read_seq if member else 0,
+        "unread_count": unread,
+        "pinned": bool(member.is_pinned) if member else False,
+        "last_message": last_message,
+        "peer": peer,
+    }
+
+
+async def bulk_last_messages(db: AsyncSession, chat_ids: list[uuid.UUID]) -> dict[uuid.UUID, dict]:
+    """One query for the whole dialog list (DISTINCT ON keeps it index-friendly)."""
+    if not chat_ids:
+        return {}
+    rows = (await db.execute(
+        text("""
+            SELECT DISTINCT ON (chat_id)
+                   chat_id, id, sender_id, seq, type, text, created_at
+            FROM messages
+            WHERE deleted_at IS NULL AND chat_id = ANY(:ids)
+            ORDER BY chat_id, seq DESC
+        """),
+        {"ids": chat_ids},
+    )).all()
+    return {
+        row[0]: {
+            "id": str(row[1]),
+            "sender_id": str(row[2]) if row[2] else None,
+            "seq": int(row[3]),
+            "type": row[4],
+            "text": row[5],
+            "created_at": row[6].isoformat() if row[6] else None,
+        }
+        for row in rows
+    }
+
+
+async def bulk_private_peers(db: AsyncSession, chat_ids: list[uuid.UUID],
+                             viewer_id: uuid.UUID) -> dict[uuid.UUID, dict]:
+    """Peer summary for private/saved chats so the client can render avatar + title."""
+    if not chat_ids:
+        return {}
+    rows = (await db.execute(
+        select(ChatMember.chat_id, User)
+        .join(User, User.id == ChatMember.user_id)
+        .where(
+            ChatMember.chat_id.in_(chat_ids),
+            ChatMember.user_id != viewer_id,
+            ChatMember.left_at.is_(None),
+        )
+    )).all()
+    return {
+        chat_id: {
+            "id": str(user.id),
+            "username": user.username,
+            "display_name": user.display_name,
+            "avatar_file_id": str(user.avatar_file_id) if user.avatar_file_id else None,
+            "last_seen_at": user.last_seen_at.isoformat() if user.last_seen_at else None,
+            "is_online": False,  # filled in by the caller that has the connection registry
+        }
+        for chat_id, user in rows
     }
 
 

@@ -11,6 +11,7 @@ from ..deps import CurrentUser, DbDep, RuntimeDep
 from ..models import Chat, ChatMember, User
 from ..schemas import (
     ChatCreate,
+    ChatPin,
     ChatMemberOut,
     ChatOut,
     ChatUpdate,
@@ -18,6 +19,8 @@ from ..schemas import (
     MemberUpdate,
 )
 from ..services import (
+    bulk_last_messages,
+    bulk_private_peers,
     chat_payload,
     emit,
     get_membership,
@@ -46,6 +49,27 @@ async def _get_or_create_private(db, user_id: uuid.UUID, other_id: uuid.UUID) ->
     await db.commit()
     await db.refresh(chat)
     return chat
+
+
+async def enrich_chats(db, runtime, pairs: list[tuple[Chat, ChatMember | None]],
+                       viewer_id: uuid.UUID) -> list[ChatOut]:
+    """Attach last message, unread counter, peer summary and presence to chat rows."""
+    chat_ids = [chat.id for chat, _ in pairs]
+    last_messages = await bulk_last_messages(db, chat_ids)
+    peers = await bulk_private_peers(db, chat_ids, viewer_id)
+    online = {str(uid) for uid in runtime.manager.online_user_ids()}
+
+    out: list[ChatOut] = []
+    for chat, member in pairs:
+        peer = peers.get(chat.id)
+        if peer is not None:
+            peer = {**peer, "is_online": peer["id"] in online}
+        out.append(ChatOut(**chat_payload(
+            chat, member,
+            last_message=last_messages.get(chat.id),
+            peer=peer,
+        )))
+    return out
 
 
 @router.post("", response_model=ChatOut, status_code=status.HTTP_201_CREATED)
@@ -117,6 +141,7 @@ async def create_chat(payload: ChatCreate, user: CurrentUser, db: DbDep, runtime
 async def list_chats(
     user: CurrentUser,
     db: DbDep,
+    runtime: RuntimeDep,
     type_: str | None = Query(default=None, alias="type"),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
@@ -125,20 +150,33 @@ async def list_chats(
         select(Chat, ChatMember)
         .join(ChatMember, ChatMember.chat_id == Chat.id)
         .where(ChatMember.user_id == user.id, ChatMember.left_at.is_(None))
-        .order_by(Chat.updated_at.desc())
+        .order_by(ChatMember.is_pinned.desc(), Chat.updated_at.desc())
         .limit(limit)
         .offset(offset)
     )
     if type_:
         stmt = stmt.where(Chat.type == type_)
     result = await db.execute(stmt)
-    return [ChatOut(**chat_payload(chat, member)) for chat, member in result.all()]
+    return await enrich_chats(db, runtime, list(result.all()), user.id)
+
+
+@router.get("/pinned", response_model=list[ChatOut])
+async def list_pinned(user: CurrentUser, db: DbDep, runtime: RuntimeDep):
+    result = await db.execute(
+        select(Chat, ChatMember)
+        .join(ChatMember, ChatMember.chat_id == Chat.id)
+        .where(ChatMember.user_id == user.id, ChatMember.left_at.is_(None),
+               ChatMember.is_pinned.is_(True))
+        .order_by(Chat.updated_at.desc())
+    )
+    return await enrich_chats(db, runtime, list(result.all()), user.id)
 
 
 @router.get("/{chat_id}", response_model=ChatOut)
-async def get_chat(chat_id: uuid.UUID, user: CurrentUser, db: DbDep):
+async def get_chat(chat_id: uuid.UUID, user: CurrentUser, db: DbDep, runtime: RuntimeDep):
     chat, member = await require_membership(db, chat_id, user.id)
-    return ChatOut(**chat_payload(chat, member))
+    enriched = await enrich_chats(db, runtime, [(chat, member)], user.id)
+    return enriched[0]
 
 
 @router.patch("/{chat_id}", response_model=ChatOut)
@@ -319,6 +357,14 @@ async def leave_chat(chat_id: uuid.UUID, user: CurrentUser, db: DbDep, runtime: 
     await db.commit()
     await emit(runtime, await member_ids(db, chat_id), "chat.member_removed",
                {"chat_id": str(chat_id), "user_id": str(user.id)})
+    return None
+
+
+@router.post("/{chat_id}/pin", status_code=204)
+async def pin_chat(chat_id: uuid.UUID, payload: ChatPin, user: CurrentUser, db: DbDep):
+    _chat, member = await require_membership(db, chat_id, user.id)
+    member.is_pinned = payload.pinned
+    await db.commit()
     return None
 
 

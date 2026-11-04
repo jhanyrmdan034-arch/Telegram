@@ -5,7 +5,7 @@ PIP    = $(VENV)/bin/pip
 PY     = $(VENV)/bin/python
 
 .PHONY: help venv test test-security load lint openapi run migrate seed superuser \
-        up down logs backup restore deploy
+        up down logs backup restore deploy android-check android-probe
 
 help:
 	@echo "make venv        install backend dependencies into ../../.venv"
@@ -18,6 +18,8 @@ help:
 	@echo "make openapi     export the OpenAPI document to docs/openapi.json"
 	@echo "make up|down     start/stop the docker compose stack"
 	@echo "make backup      run an on-demand backup inside the stack"
+	@echo "make android-check  static check of the Android platform client"
+	@echo "make android-probe  replay the Android client contract against :8000"
 
 venv:
 	$(PYTHON) -m venv $(VENV)
@@ -62,3 +64,9 @@ restore:
 
 deploy:
 	cd deploy && ./scripts/deploy.sh
+
+android-check:
+	$(PY) tools/check_android_phase1.py
+
+android-probe:
+	$(PY) tools/android_contract_probe.py --server $${SERVER:-http://127.0.0.1:8000}

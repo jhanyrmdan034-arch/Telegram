@@ -48,6 +48,24 @@ class TokenPair(BaseModel):
     expires_in: int
 
 
+class OtpRequest(BaseModel):
+    username: str = Field(min_length=4, max_length=64)
+    purpose: Literal["login", "register"] = "login"
+
+
+class OtpChallenge(BaseModel):
+    delivery: Literal["sms", "log"]
+    expires_in: int
+    debug_code: str | None = None
+
+
+class OtpVerifyRequest(BaseModel):
+    username: str = Field(min_length=4, max_length=64)
+    code: str = Field(min_length=4, max_length=8)
+    device_name: str = Field(default="Unknown device", max_length=128)
+    platform: Literal["android", "ios", "web", "desktop"] = "android"
+
+
 class SessionOut(APIModel):
     id: uuid.UUID
     device_name: str | None = None
@@ -134,6 +152,11 @@ class ChatOut(APIModel):
     created_at: datetime
     my_role: str | None = None
     last_read_seq: int = 0
+    # Fields the client's dialog list needs to render a row without extra calls.
+    unread_count: int = 0
+    pinned: bool = False
+    last_message: dict[str, Any] | None = None
+    peer: dict[str, Any] | None = None
 
 
 class ChatMemberOut(BaseModel):
@@ -142,6 +165,53 @@ class ChatMemberOut(BaseModel):
     display_name: str
     role: str
     joined_at: datetime
+
+
+class ForwardRequest(BaseModel):
+    chat_ids: list[uuid.UUID] = Field(min_length=1, max_length=20)
+
+
+class ChatPin(BaseModel):
+    pinned: bool = True
+
+
+class FolderCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    position: int = Field(default=0, ge=0, le=1000)
+
+
+class FolderUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=64)
+    position: int | None = Field(default=None, ge=0, le=1000)
+
+
+class FolderOut(APIModel):
+    id: uuid.UUID
+    name: str
+    position: int
+    created_at: datetime
+    chat_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class FolderChatsUpdate(BaseModel):
+    chat_ids: list[uuid.UUID] = Field(max_length=500)
+
+
+class PublicConfig(BaseModel):
+    """Served to unauthenticated clients so the UI can bootstrap before login."""
+
+    platform: str = "messenger"
+    registration_enabled: bool
+    default_region: str = "global"
+    max_file_size_bytes: int
+    max_message_length: int
+    max_group_members: int
+    calls_enabled: bool
+    stickers_enabled: bool
+    maintenance: bool
+    android_min_version: str
+    android_latest_version: str
+    otp_required: bool
 
 
 class MemberAdd(BaseModel):

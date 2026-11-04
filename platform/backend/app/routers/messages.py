@@ -9,7 +9,7 @@ from sqlalchemy import select
 
 from ..deps import CurrentUser, DbDep, RuntimeDep
 from ..models import ChatMember, File, Message
-from ..schemas import MessageCreate, MessageOut, MessagePage, MessageUpdate
+from ..schemas import ForwardRequest, MessageCreate, MessageOut, MessagePage, MessageUpdate
 from ..services import (
     emit,
     member_ids,
@@ -133,6 +133,71 @@ async def delete_message(message_id: uuid.UUID, user: CurrentUser, db: DbDep, ru
     await emit(runtime, await member_ids(db, message.chat_id), "message.deleted",
                {"id": str(message.id), "chat_id": str(message.chat_id)})
     return None
+
+
+@router.post("/messages/{message_id}/forward", response_model=list[MessageOut], status_code=201)
+async def forward_message(message_id: uuid.UUID, payload: ForwardRequest, user: CurrentUser,
+                          db: DbDep, runtime: RuntimeDep):
+    source = await db.get(Message, message_id)
+    if source is None or source.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Message not found")
+    await require_membership(db, source.chat_id, user.id)
+
+    targets: list[tuple[uuid.UUID, ChatMember]] = []
+    for chat_id in dict.fromkeys(payload.chat_ids):
+        chat, member = await require_membership(db, chat_id, user.id)
+        if chat.type == "channel" and member.role not in {"owner", "admin"}:
+            raise HTTPException(status_code=403, detail="Only channel administrators can post")
+        targets.append((chat_id, member))
+
+    created: list[Message] = []
+    forward_meta = {
+        "forwarded_from": {
+            "message_id": str(source.id),
+            "chat_id": str(source.chat_id),
+            "sender_id": str(source.sender_id) if source.sender_id else None,
+        }
+    }
+    for chat_id, member in targets:
+        seq = await next_chat_seq(db, chat_id)
+        copy = Message(
+            chat_id=chat_id,
+            sender_id=user.id,
+            seq=seq,
+            type=source.type,
+            text=source.text,
+            entities=source.entities,
+            file_id=source.file_id,
+            meta=forward_meta,
+        )
+        db.add(copy)
+        member.last_read_seq = seq
+        created.append(copy)
+
+    await db.commit()
+    for message in created:
+        await db.refresh(message)
+        await emit(runtime, await member_ids(db, message.chat_id), "message.new",
+                   message_payload(message))
+    return created
+
+
+@router.get("/chats/{chat_id}/messages/search", response_model=list[MessageOut])
+async def search_messages(chat_id: uuid.UUID, user: CurrentUser, db: DbDep,
+                          q: str = Query(min_length=1, max_length=128),
+                          limit: int = Query(default=50, ge=1, le=200)):
+    await require_membership(db, chat_id, user.id)
+    result = await db.execute(
+        select(Message)
+        .where(
+            Message.chat_id == chat_id,
+            Message.deleted_at.is_(None),
+            Message.text.ilike(f"%{q.strip()}%"),
+        )
+        .order_by(Message.seq.desc())
+        .limit(limit)
+    )
+    return list(result.scalars())
 
 
 @router.get("/chats/{chat_id}/messages/{message_id}", response_model=MessageOut, status_code=200)

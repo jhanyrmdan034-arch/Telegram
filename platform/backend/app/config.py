@@ -44,6 +44,13 @@ class Settings(BaseSettings):
     # Web admin console (static SPA, served by this API process at /admin)
     admin_dir: Path = Path(__file__).resolve().parent.parent.parent / "admin"
 
+    # OTP (phone/username verification). In production wire `SMS_PROVIDER` to a real
+    # gateway; `otp_debug` echoes the code in the API response for local testing only.
+    otp_ttl_seconds: int = 300
+    otp_max_attempts: int = 5
+    otp_debug: bool = False
+    sms_provider: str = "log"
+
     bootstrap_admin_username: str | None = None
 
     @field_validator("database_url")
@@ -70,6 +77,8 @@ class Settings(BaseSettings):
             problems.append("DATABASE_URL still contains a placeholder password")
         if self.debug:
             problems.append("DEBUG must be false in production")
+        if self.otp_debug:
+            problems.append("OTP_DEBUG must be false in production (it leaks codes)")
         if problems:
             raise RuntimeError("Invalid production configuration: " + "; ".join(problems))
 

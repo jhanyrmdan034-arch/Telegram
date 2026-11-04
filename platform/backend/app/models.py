@@ -115,6 +115,22 @@ class Session(Base):
 # --------------------------------------------------------------------------- #
 # Social graph
 # --------------------------------------------------------------------------- #
+class OtpCode(Base):
+    """One-time code for phone/username verification during sign-in or sign-up."""
+
+    __tablename__ = "otp_codes"
+    __table_args__ = (Index("ix_otp_username_created", "username", "created_at"),)
+
+    id: Mapped[uuid.UUID] = _pk()
+    username: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(String(16), default="login", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = _created_at()
+
+
 class Contact(Base):
     __tablename__ = "contacts"
     __table_args__ = (UniqueConstraint("owner_id", "contact_id", name="uq_contact_owner_target"),)
@@ -232,6 +248,33 @@ class Message(Base):
     created_at: Mapped[datetime] = _created_at()
     edited_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ChatFolder(Base):
+    """User-defined chat folders (the client's "chat folders" feature)."""
+
+    __tablename__ = "chat_folders"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_folder_user_name"),)
+
+    id: Mapped[uuid.UUID] = _pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class ChatFolderChat(Base):
+    __tablename__ = "chat_folder_chats"
+
+    folder_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_folders.id", ondelete="CASCADE"), primary_key=True
+    )
+    chat_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chats.id", ondelete="CASCADE"), primary_key=True
+    )
+    added_at: Mapped[datetime] = _created_at()
 
 
 # --------------------------------------------------------------------------- #
