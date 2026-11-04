@@ -1,0 +1,135 @@
+# Production stack: PostgreSQL, Redis, API, Nginx (TLS), TURN server, nightly backups.
+# Copy ../.env.example to .env, fill every CHANGE_ME value, then: docker compose up -d
+name: messenger
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-messenger}
+      POSTGRES_USER: ${POSTGRES_USER:-messenger}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-messenger} -d ${POSTGRES_DB:-messenger}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+    # Not published: only the API and backup job reach it.
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "512mb", "--maxmemory-policy", "allkeys-lru"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-messenger}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-messenger}
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_DIR: /var/lib/messenger/files
+    volumes:
+      - filedata:/var/lib/messenger/files
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    # Migrations run before the server starts so a fresh host converges in one step.
+    command: >
+      sh -c "alembic upgrade head &&
+             python -m app.cli seed &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000
+             --proxy-headers --forwarded-allow-ips '*' --workers ${API_WORKERS:-2}"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/api/v1/readyz"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    networks: [internal]
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - certbot-webroot:/var/www/certbot:ro
+    depends_on:
+      api: {condition: service_healthy}
+    networks: [internal]
+
+  coturn:
+    image: coturn/coturn:4.6-alpine
+    restart: unless-stopped
+    network_mode: host
+    command:
+      - "-n"
+      - "--log-file=stdout"
+      - "--lt-cred-mech"
+      - "--fingerprint"
+      - "--realm=${TURN_REALM:-messenger.local}"
+      - "--user=${TURN_USERNAME:-messenger}:${TURN_PASSWORD:?set TURN_PASSWORD in .env}"
+      - "--external-ip=${TURN_EXTERNAL_IP:?set TURN_EXTERNAL_IP in .env}"
+      - "--min-port=49160"
+      - "--max-port=49200"
+      - "--no-cli"
+      - "--no-tlsv1"
+      - "--no-tlsv1_1"
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "while true; do
+         /scripts/backup.sh || echo 'backup failed';
+         sleep ${BACKUP_INTERVAL_SECONDS:-86400};
+       done"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-messenger}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-messenger}
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-14}
+      BACKUP_ENCRYPTION_KEY: ${BACKUP_ENCRYPTION_KEY:-}
+      STORAGE_DIR: /var/lib/messenger/files
+    volumes:
+      - ./scripts:/scripts:ro
+      - backups:/backups
+      - filedata:/var/lib/messenger/files:ro
+    depends_on:
+      postgres: {condition: service_healthy}
+    networks: [internal]
+
+volumes:
+  pgdata:
+  redisdata:
+  filedata:
+  backups:
+  certbot-webroot:
+
+networks:
+  internal:
+    driver: bridge

@@ -1,0 +1,10 @@
+
+# platform (backend / deploy) — never commit secrets or runtime data
+platform/**/.env
+platform/deploy/.env
+platform/deploy/nginx/certs/
+platform/deploy/backups/
+platform/deploy/pgdata/
+__pycache__/
+*.pyc
+.pytest_cache/

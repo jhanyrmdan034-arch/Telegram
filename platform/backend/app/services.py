@@ -1,0 +1,174 @@
+"""Domain helpers shared by routers: membership, sequencing, auditing, events."""
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Any, Iterable
+
+from fastapi import HTTPException, Request, status
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .models import AuditLog, Chat, ChatMember, Message, User
+from .runtime import Runtime
+
+# --------------------------------------------------------------------------- #
+# Events
+# --------------------------------------------------------------------------- #
+async def emit(runtime: Runtime, user_ids: Iterable[uuid.UUID], event_type: str,
+               data: dict[str, Any]) -> None:
+    ids = list({uid for uid in user_ids})
+    if not ids:
+        return
+    await runtime.bus.publish(ids, {"type": event_type, "data": data})
+
+
+# --------------------------------------------------------------------------- #
+# Auditing
+# --------------------------------------------------------------------------- #
+async def audit(db: AsyncSession, request: Request | None, actor_id: uuid.UUID | None,
+                action: str, target_type: str | None = None, target_id: str | None = None,
+                meta: dict[str, Any] | None = None) -> None:
+    ip = None
+    if request is not None:
+        forwarded = request.headers.get("x-forwarded-for")
+        ip = forwarded.split(",")[0].strip() if forwarded else (
+            request.client.host if request.client else None
+        )
+    db.add(
+        AuditLog(
+            actor_id=actor_id,
+            action=action,
+            target_type=target_type,
+            target_id=target_id,
+            ip=ip,
+            meta=meta or {},
+        )
+    )
+    await db.commit()
+
+
+# --------------------------------------------------------------------------- #
+# Chats
+# --------------------------------------------------------------------------- #
+def private_key_for(a: uuid.UUID, b: uuid.UUID) -> str:
+    return ":".join(sorted([str(a), str(b)]))
+
+
+async def next_chat_seq(db: AsyncSession, chat_id: uuid.UUID) -> int:
+    """Atomically allocates the next per-chat sequence number.
+
+    `UPDATE ... RETURNING` keeps ordering correct under concurrency without an
+    application-level lock.
+    """
+    result = await db.execute(
+        text("UPDATE chats SET last_seq = last_seq + 1 WHERE id = :chat_id RETURNING last_seq"),
+        {"chat_id": str(chat_id)},
+    )
+    row = result.first()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return int(row[0])
+
+
+async def get_membership(db: AsyncSession, chat_id: uuid.UUID,
+                         user_id: uuid.UUID) -> ChatMember | None:
+    member = await db.get(ChatMember, {"chat_id": chat_id, "user_id": user_id})
+    if member is None or member.left_at is not None:
+        return None
+    return member
+
+
+async def require_membership(db: AsyncSession, chat_id: uuid.UUID, user_id: uuid.UUID,
+                             minimum_role: str | None = None) -> tuple[Chat, ChatMember]:
+    chat = await db.get(Chat, chat_id)
+    if chat is None:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    member = await get_membership(db, chat_id, user_id)
+    if member is None:
+        raise HTTPException(status_code=403, detail="You are not a member of this chat")
+    if minimum_role == "admin" and member.role not in {"owner", "admin"}:
+        raise HTTPException(status_code=403, detail="Administrator rights required")
+    if minimum_role == "owner" and member.role != "owner":
+        raise HTTPException(status_code=403, detail="Owner rights required")
+    return chat, member
+
+
+async def member_ids(db: AsyncSession, chat_id: uuid.UUID) -> list[uuid.UUID]:
+    result = await db.execute(
+        select(ChatMember.user_id).where(ChatMember.chat_id == chat_id, ChatMember.left_at.is_(None))
+    )
+    return [row[0] for row in result.all()]
+
+
+async def member_ids_bulk(db: AsyncSession, chat_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[uuid.UUID]]:
+    if not chat_ids:
+        return {}
+    result = await db.execute(
+        select(ChatMember.chat_id, ChatMember.user_id).where(
+            ChatMember.chat_id.in_(chat_ids), ChatMember.left_at.is_(None)
+        )
+    )
+    grouped: dict[uuid.UUID, list[uuid.UUID]] = {cid: [] for cid in chat_ids}
+    for chat_id, user_id in result.all():
+        grouped.setdefault(chat_id, []).append(user_id)
+    return grouped
+
+
+# --------------------------------------------------------------------------- #
+# Messages
+# --------------------------------------------------------------------------- #
+def message_payload(message: Message) -> dict[str, Any]:
+    return {
+        "id": str(message.id),
+        "chat_id": str(message.chat_id),
+        "sender_id": str(message.sender_id) if message.sender_id else None,
+        "seq": message.seq,
+        "type": message.type,
+        "text": message.text,
+        "entities": message.entities,
+        "reply_to_id": str(message.reply_to_id) if message.reply_to_id else None,
+        "file_id": str(message.file_id) if message.file_id else None,
+        "meta": message.meta or {},
+        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "edited_at": message.edited_at.isoformat() if message.edited_at else None,
+    }
+
+
+def chat_payload(chat: Chat, member: ChatMember | None = None) -> dict[str, Any]:
+    return {
+        "id": str(chat.id),
+        "type": chat.type,
+        "title": chat.title,
+        "username": chat.username,
+        "about": chat.about,
+        "avatar_file_id": str(chat.avatar_file_id) if chat.avatar_file_id else None,
+        "owner_id": str(chat.owner_id) if chat.owner_id else None,
+        "is_public": chat.is_public,
+        "member_count": chat.member_count,
+        "last_seq": chat.last_seq,
+        "created_at": chat.created_at.isoformat() if chat.created_at else None,
+        "my_role": member.role if member else None,
+        "last_read_seq": member.last_read_seq if member else 0,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Accounts
+# --------------------------------------------------------------------------- #
+def account_usable(user: User) -> bool:
+    now = datetime.now(UTC)
+    if user.is_blocked or not user.is_active:
+        return False
+    if user.suspended_until is not None:
+        until = user.suspended_until if user.suspended_until.tzinfo else user.suspended_until.replace(
+            tzinfo=UTC
+        )
+        if until > now:
+            return False
+    return True
+
+
+def ensure_not_self(target: uuid.UUID, actor: uuid.UUID) -> None:
+    if target == actor:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot target yourself")
