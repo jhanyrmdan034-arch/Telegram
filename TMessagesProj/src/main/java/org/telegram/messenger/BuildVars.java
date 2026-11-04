@@ -18,6 +18,14 @@ import java.util.Objects;
 
 public class BuildVars {
 
+    /**
+     * Proprietary backend endpoints. These are the only two values that have to
+     * change to point a build at staging or production.
+     * 10.0.2.2 is the host machine as seen from the Android emulator.
+     */
+    public static final String PLATFORM_API_URL = "http://10.0.2.2:8000";
+    public static final String PLATFORM_WS_URL = "ws://10.0.2.2:8000/api/v1/ws";
+
     public static boolean DEBUG_VERSION = BuildConfig.DEBUG_VERSION;
     public static boolean LOGS_ENABLED = BuildConfig.DEBUG_VERSION;
     public static boolean DEBUG_PRIVATE_VERSION = BuildConfig.DEBUG_PRIVATE_VERSION;

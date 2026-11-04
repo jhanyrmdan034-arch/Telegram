@@ -49,7 +49,16 @@ class Settings(BaseSettings):
     otp_ttl_seconds: int = 300
     otp_max_attempts: int = 5
     otp_debug: bool = False
+    # "log" is development only. twilio | kavenegar | webhook need the credentials below.
     sms_provider: str = "log"
+    twilio_account_sid: str | None = None
+    twilio_auth_token: str | None = None
+    twilio_from_number: str | None = None
+    kavenegar_api_key: str | None = None
+    kavenegar_sender: str | None = None
+    sms_webhook_url: str | None = None
+    sms_webhook_token: str | None = None
+    sms_webhook_from: str | None = None
 
     bootstrap_admin_username: str | None = None
 
@@ -77,6 +86,17 @@ class Settings(BaseSettings):
             problems.append("DATABASE_URL still contains a placeholder password")
         if self.debug:
             problems.append("DEBUG must be false in production")
+        if self.sms_provider.strip().lower() in {"", "log"}:
+            problems.append(
+                "SMS_PROVIDER is 'log': verification codes would never reach users"
+            )
+        if self.sms_provider.strip().lower() == "twilio" and not (
+                self.twilio_account_sid and self.twilio_auth_token and self.twilio_from_number):
+            problems.append("SMS_PROVIDER=twilio but the Twilio credentials are incomplete")
+        if self.sms_provider.strip().lower() == "kavenegar" and not self.kavenegar_api_key:
+            problems.append("SMS_PROVIDER=kavenegar but KAVENEGAR_API_KEY is empty")
+        if self.sms_provider.strip().lower() == "webhook" and not self.sms_webhook_url:
+            problems.append("SMS_PROVIDER=webhook but SMS_WEBHOOK_URL is empty")
         if self.otp_debug:
             problems.append("OTP_DEBUG must be false in production (it leaks codes)")
         if problems:

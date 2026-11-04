@@ -28,6 +28,9 @@ ROOT = Path(__file__).resolve().parents[2]
 CLIENT_ROOT = ROOT / "TMessagesProj/src/main/java/org/telegram/platform"
 OPENAPI = ROOT / "platform/docs/openapi.json"
 
+# Only the TL seam and the mapper may touch tgnet; everything else stays transport-agnostic.
+TGNET_PACKAGES = ("mapper/", "tl/")
+
 FORBIDDEN = (
     "ConnectionsManager",
     "SendMessagesHelper",
@@ -43,6 +46,14 @@ PATH_CHAIN = re.compile(
 )
 STRING_LITERAL = re.compile(r'"((?:[^"\\]|\\.)*)"')
 COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+
+
+def strip_comments(source: str) -> str:
+    """Removes comments but keeps line structure (so imports stay detectable)."""
+    def blank(match: "re.Match[str]") -> str:
+        return "\n" * match.group(0).count("\n")
+
+    return COMMENT.sub(blank, source)
 
 
 def java_files() -> list[Path]:
@@ -78,13 +89,18 @@ def check_independence(files: list[Path]) -> list[str]:
     problems = []
     for path in files:
         # Comments are allowed to name the MTProto classes they replace.
-        source = COMMENT.sub("", path.read_text(encoding="utf-8"))
+        source = strip_comments(path.read_text(encoding="utf-8"))
         relative = path.relative_to(CLIENT_ROOT).as_posix()
+        if relative.startswith(TGNET_PACKAGES):
+            # The seam legitimately names the MTProto classes it sits in front of.
+            source = "\n".join(line for line in source.splitlines()
+                               if not line.startswith("import org.telegram.tgnet"))
+            source = source.replace("ConnectionsManager.RequestDelegate", "RequestDelegate")
         for symbol in FORBIDDEN:
             if symbol in source:
                 problems.append(f"{relative}: forbidden MTProto symbol {symbol}")
-        if "import org.telegram.tgnet" in source and not relative.startswith("mapper/"):
-            problems.append(f"{relative}: only mapper/* may import org.telegram.tgnet")
+        if "import org.telegram.tgnet" in source and not relative.startswith(TGNET_PACKAGES):
+            problems.append(f"{relative}: only mapper/* and tl/* may import org.telegram.tgnet")
         if "import org.telegram.platform" in source and "package org.telegram.platform" not in source:
             problems.append(f"{relative}: bad platform import")
     return problems
@@ -127,6 +143,56 @@ def _matches_template(path: str, declared: set[str]) -> bool:
     return False
 
 
+# --------------------------------------------------------------------------- #
+# Phase 2: the upstream files we touched may only gain lines, never lose any
+# --------------------------------------------------------------------------- #
+INTEGRATION_POINTS = {
+    "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java":
+        ["PlatformAuthInterceptor.intercept"],
+    "TMessagesProj/src/main/java/org/telegram/messenger/ApplicationLoader.java":
+        ["PlatformBridge.init", "startSession"],
+    "TMessagesProj/src/main/java/org/telegram/messenger/MessagesController.java":
+        ["PlatformBridge.get().endSession()"],
+    "TMessagesProj/src/main/java/org/telegram/messenger/BuildVars.java":
+        ["PLATFORM_API_URL", "PLATFORM_WS_URL"],
+}
+
+
+def check_integration() -> list[str]:
+    """Guarantees the UI was not rewritten: only insertions in upstream files."""
+    import subprocess
+
+    problems = []
+    for relative, markers in INTEGRATION_POINTS.items():
+        current = (ROOT / relative).read_text(encoding="utf-8")
+        for marker in markers:
+            if marker not in current:
+                problems.append(f"{relative}: missing integration marker {marker!r}")
+        try:
+            upstream = subprocess.run(
+                ["git", "show", f"origin/master:{relative}"], cwd=ROOT,
+                capture_output=True, text=True, check=True).stdout
+        except subprocess.CalledProcessError:
+            problems.append(f"{relative}: cannot read the upstream version for comparison")
+            continue
+        diff = subprocess.run(
+            ["git", "diff", "--unified=0", "--no-color", "--", relative], cwd=ROOT,
+            capture_output=True, text=True).stdout
+        removed = [line for line in diff.splitlines()
+                   if line.startswith("-") and not line.startswith("---")]
+        if removed:
+            problems.append(f"{relative}: {len(removed)} upstream line(s) removed — "
+                            f"UI/behaviour must stay untouched")
+        # Compare against upstream instead of asserting balance: the original files
+        # contain braces inside string literals, so only the delta is meaningful.
+        current_delta = current.count("{") - current.count("}")
+        upstream_delta = upstream.count("{") - upstream.count("}")
+        if current_delta != upstream_delta:
+            problems.append(f"{relative}: brace balance changed ({upstream_delta} -> "
+                            f"{current_delta})")
+    return problems
+
+
 def main() -> int:
     files = java_files()
     if not files:
@@ -136,6 +202,7 @@ def main() -> int:
     classes, methods, parse_problems = check_parse(files)
     independence = check_independence(files)
     endpoint_problems, endpoint_count = check_endpoints(files)
+    integration_problems = check_integration()
 
     total_lines = sum(len(f.read_text(encoding="utf-8").splitlines()) for f in files)
 
@@ -148,14 +215,15 @@ def main() -> int:
           f"{classes} types, {methods} methods")
     print(f"endpoints referenced: {endpoint_count}")
 
-    problems = parse_problems + independence + endpoint_problems
+    problems = parse_problems + independence + endpoint_problems + integration_problems
     if problems:
         print("\n== problems ==")
         for problem in problems:
             print("  -", problem)
         return 1;
 
-    print("\nOK: parses cleanly, no MTProto coupling, every endpoint exists in OpenAPI")
+    print("\nOK: parses cleanly, no MTProto coupling outside the seam, "
+          "every endpoint exists in OpenAPI, upstream files only gained lines")
     return 0
 
 

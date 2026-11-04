@@ -141,6 +141,10 @@ public final class PlatformBridge {
         return localStore;
     }
 
+    public TokenStore tokens() {
+        return tokenStore;
+    }
+
     public DtoMapper mapper() {
         return mapper;
     }

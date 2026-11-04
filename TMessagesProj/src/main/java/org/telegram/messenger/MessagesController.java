@@ -16127,6 +16127,9 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void performLogout(int type) {
+        if (org.telegram.platform.PlatformBridge.isReady()) {
+            org.telegram.platform.PlatformBridge.get().endSession();
+        }
         if (type == 1) {
             GramWalletStorage.wipeForUser(ApplicationLoader.applicationContext, currentAccount, getUserConfig().getClientUserId());
             unregistedPush();

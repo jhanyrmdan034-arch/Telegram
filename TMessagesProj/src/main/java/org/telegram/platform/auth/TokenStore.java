@@ -12,12 +12,22 @@ public interface TokenStore {
 
     void save(String accessToken, String refreshToken);
 
+    /**
+     * Password generated at registration. The login flow is OTP based, but the
+     * backend also accepts a password; keeping the generated one lets the user
+     * sign in from a second device without inventing a credential by hand.
+     */
+    void saveAccountPassword(String password);
+
+    String accountPassword();
+
     void clear();
 
     /** Simple implementation used by tests and as a fallback when Keystore is unavailable. */
     final class InMemory implements TokenStore {
         private volatile String access;
         private volatile String refresh;
+        private volatile String password;
 
         @Override
         public String accessToken() {
@@ -36,9 +46,20 @@ public interface TokenStore {
         }
 
         @Override
+        public void saveAccountPassword(String password) {
+            this.password = password;
+        }
+
+        @Override
+        public String accountPassword() {
+            return password;
+        }
+
+        @Override
         public void clear() {
             this.access = null;
             this.refresh = null;
+            this.password = null;
         }
     }
 }

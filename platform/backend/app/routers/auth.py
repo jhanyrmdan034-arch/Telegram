@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import hmac
 import secrets
 import uuid
@@ -34,6 +35,7 @@ from ..security import (
     verify_password,
 )
 
+log = logging.getLogger("messenger.auth")
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
@@ -157,8 +159,14 @@ async def request_otp(payload: OtpRequest, request: Request, db: DbDep, runtime:
     db.add(record)
     await db.commit()
 
-    sender = build_sms_sender(runtime.settings.sms_provider)
-    await sender.send(payload.username, f"Messenger verification code: {code}")
+    sender = build_sms_sender(runtime.settings)
+    try:
+        await sender.send(payload.username, f"Messenger verification code: {code}")
+    except Exception as exc:  # noqa: BLE001 - any gateway failure is a delivery failure
+        record.consumed_at = datetime.now(UTC)
+        await db.commit()
+        log.warning("OTP delivery failed via %s: %s", sender.name, exc)
+        raise HTTPException(status_code=502, detail="Verification code could not be delivered")
     await _security_event(db, user.id if user else None, "auth.otp_requested", request,
                           {"purpose": payload.purpose})
 

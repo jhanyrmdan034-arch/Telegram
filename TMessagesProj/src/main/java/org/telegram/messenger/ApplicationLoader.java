@@ -290,6 +290,25 @@ public class ApplicationLoader extends Application {
 
         super.onCreate();
 
+        // Connect the app to the proprietary backend and restore a saved session.
+        // Restoring performs a real HTTP call, so it must not run on the main thread.
+        try {
+            final org.telegram.platform.PlatformBridge platformBridge = org.telegram.platform.PlatformBridge.init(this,
+                    org.telegram.platform.PlatformConfig.builder()
+                            .httpBaseUrl(BuildVars.PLATFORM_API_URL)
+                            .websocketUrl(BuildVars.PLATFORM_WS_URL)
+                            .build());
+            org.telegram.messenger.Utilities.globalQueue.postRunnable(() -> {
+                try {
+                    platformBridge.startSession();
+                } catch (Throwable t) {
+                    FileLog.e(t);
+                }
+            });
+        } catch (Throwable t) {
+            FileLog.e(t);
+        }
+
         // AndroidUtilities must be initialized before FileLog
         final String helloWorld = AndroidUtilities.getHelloWorld();
 

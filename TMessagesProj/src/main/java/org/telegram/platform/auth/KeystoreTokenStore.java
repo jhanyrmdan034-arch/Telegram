@@ -26,6 +26,7 @@ public final class KeystoreTokenStore implements TokenStore {
     private static final String PREFS = "platform_tokens";
     private static final String PREF_ACCESS = "access";
     private static final String PREF_REFRESH = "refresh";
+    private static final String PREF_PASSWORD = "account_password";
     private static final String TRANSFORMATION = "AES/GCM/NoPadding";
     private static final int GCM_TAG_BITS = 128;
     private static final Charset UTF8 = Charset.forName("UTF-8");
@@ -33,6 +34,7 @@ public final class KeystoreTokenStore implements TokenStore {
     private final SharedPreferences preferences;
     private volatile String accessCache;
     private volatile String refreshCache;
+    private volatile String passwordCache;
 
     public KeystoreTokenStore(Context context) {
         this.preferences = context.getApplicationContext()
@@ -66,10 +68,31 @@ public final class KeystoreTokenStore implements TokenStore {
     }
 
     @Override
+    public synchronized void saveAccountPassword(String password) {
+        passwordCache = password;
+        SharedPreferences.Editor editor = preferences.edit();
+        if (password == null) {
+            editor.remove(PREF_PASSWORD);
+        } else {
+            editor.putString(PREF_PASSWORD, encrypt(password));
+        }
+        editor.apply();
+    }
+
+    @Override
+    public synchronized String accountPassword() {
+        if (passwordCache == null) {
+            passwordCache = read(PREF_PASSWORD);
+        }
+        return passwordCache;
+    }
+
+    @Override
     public synchronized void clear() {
         accessCache = null;
         refreshCache = null;
-        preferences.edit().remove(PREF_ACCESS).remove(PREF_REFRESH).apply();
+        passwordCache = null;
+        preferences.edit().remove(PREF_ACCESS).remove(PREF_REFRESH).remove(PREF_PASSWORD).apply();
     }
 
     private String read(String key) {
