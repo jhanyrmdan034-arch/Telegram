@@ -11369,6 +11369,34 @@ public class MessagesController extends BaseController implements NotificationCe
         });
     }
 
+    /**
+     * Shows or clears the "typing…" line for a chat opened by the platform
+     * transport. It writes the exact structures MTProto updates write, so the
+     * subtitle, the dot animation and the enter-button state stay untouched.
+     */
+    public void platformSetTyping(long dialogId, long userId, boolean typing) {
+        AndroidUtilities.runOnUIThread(() -> {
+            if (typing) {
+                LongSparseArray<CharSequence> inner = printingStrings.get(dialogId);
+                if (inner == null) {
+                    inner = new LongSparseArray<>();
+                    printingStrings.put(dialogId, inner);
+                }
+                inner.put(0, LocaleController.getString(R.string.Typing));
+                LongSparseArray<Integer> types = printingStringsTypes.get(dialogId);
+                if (types == null) {
+                    types = new LongSparseArray<>();
+                    printingStringsTypes.put(dialogId, types);
+                }
+                types.put(0, 0);
+            } else {
+                printingStrings.remove(dialogId);
+                printingStringsTypes.remove(dialogId);
+            }
+            getNotificationCenter().postNotificationName(NotificationCenter.updateInterfaces, UPDATE_MASK_ALL);
+        });
+    }
+
     public void cancelTyping(int action, long dialogId, long threadMsgId) {
         if (action < 0 || action >= sendingTypings.length || sendingTypings[action] == null) {
             return;
@@ -11385,6 +11413,10 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean sendTyping(long dialogId, long threadMsgId, int action, int classGuid) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled()) {
+            org.telegram.platform.tl.PlatformChatSync.sendTyping(dialogId);
+            return true;
+        }
         return sendTyping(dialogId, threadMsgId, action, null, classGuid);
     }
 

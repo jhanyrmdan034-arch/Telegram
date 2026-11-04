@@ -200,6 +200,75 @@ public final class PlatformChatSync {
         });
     }
 
+    /**
+     * In-chat search. The results are delivered through the same notifications the
+     * MTProto search posts, so the search bar and its highlights are unchanged.
+     */
+    public static void searchInChat(long dialogId, String query, int guid, int direction,
+                                    boolean jumpToMessage) {
+        if (!isEnabled() || query == null || query.trim().isEmpty()) {
+            return;
+        }
+        final String chatId = chatUuidFor(dialogId);
+        if (chatId == null) {
+            return;
+        }
+        final int finalGuid = guid;
+        final boolean jump = jumpToMessage;
+        NotificationCenter.getGlobalInstance()
+                .postNotificationName(NotificationCenter.chatSearchResultsLoading, finalGuid);
+        PlatformBridge.get().messages().search(chatId, query.trim(),
+                new Callback<List<JsonObject>>() {
+                    @Override
+                    public void onSuccess(List<JsonObject> rows) {
+                        final List<JsonObject> results = rows;
+                        AndroidUtilities.runOnUIThread(() -> {
+                            int index = 0;
+                            for (JsonObject row : results) {
+                                String id = optString(row, "id");
+                                if (id == null) {
+                                    continue;
+                                }
+                                int messageId = PlatformBridge.get().ids().toInt(id);
+                                index++;
+                                NotificationCenter.getGlobalInstance().postNotificationName(
+                                        NotificationCenter.chatSearchResultsAvailable, finalGuid,
+                                        messageId, 0, dialogId, index, results.size(), jump);
+                            }
+                            if (results.isEmpty()) {
+                                NotificationCenter.getGlobalInstance().postNotificationName(
+                                        NotificationCenter.chatSearchResultsAvailable, finalGuid,
+                                        0, 0, dialogId, 0, 0, jump);
+                            }
+                        });
+                    }
+
+                    @Override
+                    public void onError(PlatformException error) {
+                        FileLog.e("platform search: " + error);
+                    }
+                });
+    }
+
+    /** Incoming typing: feeds the same structure the MTProto updates fill. */
+    public static void onTypingJson(JsonObject data) {
+        if (!isEnabled() || data == null) {
+            return;
+        }
+        String user = data.has("user_id") && !data.get("user_id").isJsonNull()
+                ? data.get("user_id").getAsString() : null;
+        String chat = data.has("chat_id") && !data.get("chat_id").isJsonNull()
+                ? data.get("chat_id").getAsString() : null;
+        if (user == null || chat == null) {
+            return;
+        }
+        final long dialogId = PlatformBridge.get().ids().toLong(user);
+        final long chatDialog = -PlatformBridge.get().ids().toLong(chat);
+        AccountInstance.getInstance(0).getMessagesController()
+                .platformSetTyping(activeDialogId != 0 ? activeDialogId : chatDialog,
+                        dialogId, true);
+    }
+
     public static void sendTyping(long dialogId) {
         final String chatId = chatUuidFor(dialogId);
         if (isEnabled() && chatId != null) {
@@ -220,6 +289,10 @@ public final class PlatformChatSync {
         String eventChat = data.has("chat_id") && !data.get("chat_id").isJsonNull()
                 ? data.get("chat_id").getAsString() : null;
         if (!chatId.equals(eventChat)) {
+            return;
+        }
+        if ("typing".equals(type)) {
+            onTypingJson(data);
             return;
         }
         switch (type) {

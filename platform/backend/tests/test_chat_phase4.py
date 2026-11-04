@@ -177,3 +177,25 @@ def test_read_state_is_per_member(sync_client: TestClient):
     alice_row = next(r for r in sync_client.get("/api/v1/chats", headers=_h(alice)).json()
                      if r["id"] == chat["id"])
     assert alice_row["unread_count"] == 0
+
+
+def test_http_read_receipt_broadcasts_read_updated(sync_client: TestClient):
+    """The read button uses the REST endpoint; the sender must still be told."""
+    alice, bob = _register(sync_client), _register(sync_client)
+    chat = _chat(sync_client, alice, bob)
+    _send(sync_client, alice, chat["id"], "خوانده شود")
+
+    with sync_client.websocket_connect(f"/api/v1/ws?token={alice['access_token']}") as socket:
+        assert socket.receive_json()["type"] == "ready"
+        row = next(r for r in sync_client.get("/api/v1/chats", headers=_h(bob)).json()
+                   if r["id"] == chat["id"])
+        assert sync_client.post(f"/api/v1/chats/{chat['id']}/read", headers=_h(bob),
+                                params={"seq": row["last_seq"]}).status_code == 204
+        for _ in range(10):
+            frame = socket.receive_json()
+            if frame["type"] == "read.updated":
+                assert frame["data"]["chat_id"] == chat["id"]
+                assert frame["data"]["user_id"] != alice["user"]["id"] if "user" in alice else True
+                break
+        else:
+            pytest.fail("no read.updated event for the sender")

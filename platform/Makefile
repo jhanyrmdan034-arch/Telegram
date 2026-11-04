@@ -77,6 +77,12 @@ android-probe:
 android-login-probe:
 	$(PY) tools/android_login_probe.py --server $${SERVER:-http://127.0.0.1:8000}
 
+chat-audit:
+	$(PY) tools/check_chat_no_mtproto.py
+
+android-chat-probe:
+	$(PY) tools/android_chat_probe.py
+
 android-dialogs-probe:
 	$(PY) tools/android_dialogs_probe.py
 

@@ -392,8 +392,12 @@ async def mark_read(chat_id: uuid.UUID, user: CurrentUser, db: DbDep, runtime: R
     if seq > member.last_read_seq:
         member.last_read_seq = min(seq, chat.last_seq)
         await db.commit()
-    await emit(runtime, await member_ids(db, chat_id), "message.read",
-               {"chat_id": str(chat_id), "user_id": str(user.id), "seq": member.last_read_seq})
+    recipients = await member_ids(db, chat_id)
+    payload = {"chat_id": str(chat_id), "user_id": str(user.id), "seq": member.last_read_seq}
+    # Two names for one fact: message.read is the transport event, read.updated is
+    # what the dialog list and the chat screen subscribe to.
+    await emit(runtime, recipients, "read.updated", payload)
+    await emit(runtime, recipients, "message.read", payload)
     return None
 
 

@@ -3573,6 +3573,12 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     public int editMessage(MessageObject messageObject, String message, boolean searchLinks, final BaseFragment fragment, ArrayList<TLRPC.MessageEntity> entities, int scheduleDate, int scheduleRepeatPeriod) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled()) {
+            // Edited text goes to our backend; the bubble updates from message.edited.
+            org.telegram.platform.tl.PlatformChatSync.editMessage(messageObject.getDialogId(),
+                    messageObject.getId(), message);
+            return 0;
+        }
         if (fragment == null || fragment.getParentActivity() == null) {
             return 0;
         }
