@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+mtserver.db
+server_key.pem
+venv/

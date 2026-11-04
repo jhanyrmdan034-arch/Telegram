@@ -1,0 +1,4 @@
+# Python dependencies for the custom MTProto backend server.
+# Install with:  python3 -m venv venv && ./venv/bin/pip install -r server/requirements.txt
+telethon>=1.36   # used as the TL (Type Language) serialization library, layer 232 — same schema as this repo's TLRPC.java
+cryptography>=42 # AES / RSA primitives

@@ -18,6 +18,7 @@
 #include <zlib.h>
 #include <memory>
 #include <string>
+#include "CustomBackendConfig.h"
 #include <cinttypes>
 #include "ConnectionsManager.h"
 #include "DownloadRequestBudget.h"
@@ -438,7 +439,11 @@ void ConnectionsManager::loadConfig() {
             RAND_bytes((uint8_t *) &pushSessionId, 8);
         }
         if (currentDatacenterId == 0) {
+#if CUSTOM_BACKEND
+            currentDatacenterId = CUSTOM_BACKEND_DC_ID;
+#else
             currentDatacenterId = 2;
+#endif
         }
         saveConfig();
     }
@@ -1818,6 +1823,14 @@ uint8_t ConnectionsManager::getIpStratagy() {
 
 void ConnectionsManager::initDatacenters() {
     Datacenter *datacenter;
+#if CUSTOM_BACKEND
+    // Self-hosted backend: a single datacenter pointing at our own server.
+    if (datacenters.find(CUSTOM_BACKEND_DC_ID) == datacenters.end()) {
+        datacenter = new Datacenter(instanceNum, CUSTOM_BACKEND_DC_ID);
+        datacenter->addAddressAndPort(CUSTOM_BACKEND_HOST, CUSTOM_BACKEND_PORT, 0, "");
+        datacenters[CUSTOM_BACKEND_DC_ID] = datacenter;
+    }
+#else
     if (!testBackend) {
         if (datacenters.find(1) == datacenters.end()) {
             datacenter = new Datacenter(instanceNum, 1);
@@ -1876,6 +1889,7 @@ void ConnectionsManager::initDatacenters() {
             datacenters[3] = datacenter;
         }
     }
+#endif
 }
 
 void ConnectionsManager::attachConnection(ConnectionSocket *connection) {

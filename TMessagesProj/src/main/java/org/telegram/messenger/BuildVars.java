@@ -43,6 +43,11 @@ public class BuildVars {
     // works only on official app ids, disable on your forks
     public static boolean SUPPORTS_PASSKEYS = true;
 
+    // ---- Self-hosted backend (fork): when enabled, the app talks to CUSTOM_BACKEND_BASE_URL
+    //      instead of Telegram's datacenters. See ROADMAP-FA.md
+    public static boolean USE_CUSTOM_BACKEND = false;
+    public static String CUSTOM_BACKEND_BASE_URL = "wss://chat.example.ir/ws";
+
     static {
         if (ApplicationLoader.applicationContext != null) {
             SharedPreferences sharedPreferences = ApplicationLoader.applicationContext.getSharedPreferences("systemConfig", Context.MODE_PRIVATE);
