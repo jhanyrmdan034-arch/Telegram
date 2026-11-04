@@ -77,5 +77,8 @@ android-probe:
 android-login-probe:
 	$(PY) tools/android_login_probe.py --server $${SERVER:-http://127.0.0.1:8000}
 
+android-dialogs-probe:
+	$(PY) tools/android_dialogs_probe.py
+
 android-demo-probe:
 	$(PY) tools/android_demo_login_probe.py --server $${SERVER:-http://127.0.0.1:8000}
