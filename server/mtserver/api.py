@@ -177,8 +177,12 @@ async def send_code(ctx, req):
 
 @handler(F.auth.SignInRequest)
 async def sign_in(ctx, req):
-    if not ctx.server.db.check_code(req.phone_number, req.phone_code_hash, req.phone_code or ""):
-        return RpcError(error_code=400, error_message="PHONE_CODE_INVALID")
+    if ctx.server.config.dev_code is None:
+        if not ctx.server.db.check_code(req.phone_number, req.phone_code_hash, req.phone_code or ""):
+            return RpcError(error_code=400, error_message="PHONE_CODE_INVALID")
+    else:
+        # TEST MODE (--dev-code set): accept any code, auto-create the user
+        print("[server] TEST MODE: code check skipped for %s" % req.phone_number, flush=True)
     u = ctx.server.db.get_or_create_user(req.phone_number)
     ctx.user_id = u["id"]
     ctx.server.register_session(ctx)
@@ -188,7 +192,14 @@ async def sign_in(ctx, req):
 
 @handler(F.auth.SignUpRequest)
 async def sign_up(ctx, req):
-    return RpcError(error_code=400, error_message="SIGNUP_NOT_SUPPORTED_USE_SIGNIN")
+    if ctx.server.config.dev_code is None:
+        return RpcError(error_code=400, error_message="SIGNUP_NOT_SUPPORTED_USE_SIGNIN")
+    # TEST MODE: signUp == auto-register + sign in
+    u = ctx.server.db.get_or_create_user(req.phone_number)
+    ctx.user_id = u["id"]
+    ctx.server.register_session(ctx)
+    print("[server] TEST MODE: user signed up: id=%d phone=%s" % (u["id"], u["phone"]), flush=True)
+    return TA.Authorization(user=user_obj(ctx.server, u["id"], self_id=u["id"]))
 
 
 @handler(F.auth.LogOutRequest)

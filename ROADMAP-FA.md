@@ -101,6 +101,8 @@ Backups + monitoring + multi-location در ایران
 - تست عکس end-to-end پاس شد: آپلود ۲۰۰KB → sendMedia → push به کاربر دوم → تاریخچه → دانلود با `upload.getFile` (content match=True)
 - صفحه‌ی statusSurvey JSON: `--http-status-port 8080` → `GET /` = وضعیت زنده (users/messages/files/uptime)
 - سرور live شده: `python3 -m mtserver.main --listen-host 0.0.0.0 --listen-port 8443 --public-host <IP سرور> --public-port 8443 --http-status-port 8080`
+- **ورود بدون کد (نسخه تست):** اگر سرور با `--dev-code` اجرا شود، هر کدی در `auth.signIn` قبول می‌شود و کاربر خودکار ساخته می‌شود
+- **deploy روی هاست:** `server/package_deploy.sh` (tar.gz schoon) یا `server/Dockerfile` — راهنمای کامل: `BUILD-APK-FA.md`
 - **تست end-to-end پاس شد** (`server/test_client.py` — کلاینت تست با همان پروتکل): handshake + لاگین دو کاربر + ارسال پیام + **push زنده به سشن کاربر دیگر** + تاریخچه + دیالوگ‌ها → `ALL TESTS PASSED ✅`
 - اجرا: `PYTHON=/path/to/venv/bin/python bash server/run_demo.sh [port]`
   (وابستگی‌ها: `pip install -r server/requirements.txt` — telethon + cryptography)
