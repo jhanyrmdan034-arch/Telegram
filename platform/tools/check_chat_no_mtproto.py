@@ -91,9 +91,17 @@ def main() -> int:
             if marker in source:
                 problems.append(f"tl/{name}: uses MTProto symbol {marker}")
 
-    for relative in ("platform/tl/PlatformMediaSync.java", "platform/repo/MediaRepository.java"):
+    # MediaRepository is pure HTTP. PlatformMediaSync is allowed to construct TL
+    # objects (a bubble needs them) but must never call into MTProto.
+    banned = {
+        "platform/repo/MediaRepository.java": ("ConnectionsManager", "sendRequest(", "MessagesStorage",
+                                               "TLRPC.", "FileLoader"),
+        "platform/tl/PlatformMediaSync.java": ("ConnectionsManager", "sendRequest(", "MessagesStorage",
+                                               "FileLoader", "getFileLoader", "ImageLoader"),
+    }
+    for relative, markers in banned.items():
         source = (JAVA / relative).read_text(encoding="utf-8")
-        for marker in ("ConnectionsManager", "sendRequest(", "MessagesStorage", "TLRPC.", "FileLoader"):
+        for marker in markers:
             if marker in source:
                 problems.append(f"{relative}: uses MTProto symbol {marker}")
 

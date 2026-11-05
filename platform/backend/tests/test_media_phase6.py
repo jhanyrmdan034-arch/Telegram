@@ -237,3 +237,169 @@ def test_deleting_a_file_notifies_the_chats(sync_client: TestClient):
             if "media.deleted" in seen:
                 break
         assert "media.deleted" in seen, seen
+
+
+# --------------------------------------------------------------------------- #
+# download tokens, public flag, upload budget
+# --------------------------------------------------------------------------- #
+
+def test_download_token_grants_file_scoped_access(sync_client: TestClient):
+    alice, bob = _register(sync_client), _register(sync_client)
+    carol = _register(sync_client)
+    chat = _chat(sync_client, alice, bob)
+    file_id = _upload(sync_client, alice, JPEG).json()["id"]
+    other_id = _upload(sync_client, alice, JPEG + b"-other").json()["id"]
+    sync_client.post(f"/api/v1/chats/{chat['id']}/messages", headers=_h(alice),
+                     json={"type": "photo", "file_id": file_id})
+
+    token = sync_client.post(f"/api/v1/files/{file_id}/download-token", headers=_h(bob))
+    assert token.status_code == 200, token.text
+    from urllib.parse import urlparse
+
+    url = token.json()["url"]
+    parsed = urlparse(url)
+    streamed = sync_client.get(f"{parsed.path}?{parsed.query}")
+    assert streamed.status_code == 200 and streamed.content == JPEG
+
+    # A token for one file must not open another file.
+    swapped = urlparse(token.json()["url"])
+    assert sync_client.get(f"{swapped.path.replace(str(file_id), str(other_id))}?"
+                           f"{swapped.query}").status_code == 403
+    # Nor may an outsider obtain one.
+    assert sync_client.post(f"/api/v1/files/{file_id}/download-token",
+                            headers=_h(carol)).status_code == 403
+    # Tampering with the signature is refused.
+    tampered = urlparse(token.json()["url"][:-3] + "abc")
+    assert sync_client.get(f"{tampered.path}?{tampered.query}").status_code == 403
+
+
+def test_expired_download_token_is_refused(sync_client: TestClient):
+    alice = _register(sync_client)
+    file_id = _upload(sync_client, alice, JPEG).json()["id"]
+    runtime = sync_client.app.state.runtime
+    original = runtime.settings.download_token_ttl_seconds
+    runtime.settings.download_token_ttl_seconds = -5
+    try:
+        raw = sync_client.post(f"/api/v1/files/{file_id}/download-token",
+                               headers=_h(alice)).json()["url"]
+    finally:
+        runtime.settings.download_token_ttl_seconds = original
+    from urllib.parse import urlparse
+
+    parsed = urlparse(raw)
+    assert sync_client.get(f"{parsed.path}?{parsed.query}").status_code == 403
+
+
+def test_public_flag_does_not_bypass_ownership_when_disabled():
+    import asyncio
+    from types import SimpleNamespace
+
+    from app.routers.files import _can_access
+
+    class _Db:
+        async def execute(self, *args, **kwargs):
+            return SimpleNamespace(scalar_one_or_none=lambda: None)
+
+    runtime = SimpleNamespace(settings=SimpleNamespace(public_files_enabled=False))
+    record = SimpleNamespace(is_public=True, owner_id=uuid.uuid4(), id=uuid.uuid4())
+    assert asyncio.run(_can_access(_Db(), record, uuid.uuid4(), runtime)) is False
+
+    permissive = SimpleNamespace(settings=SimpleNamespace(public_files_enabled=True))
+    assert asyncio.run(_can_access(_Db(), record, uuid.uuid4(), permissive)) is True
+
+
+def test_upload_budget_is_per_account(sync_client: TestClient):
+    alice = _register(sync_client)
+    runtime = sync_client.app.state.runtime
+    original = runtime.settings.upload_rate_limit_requests
+    runtime.settings.upload_rate_limit_requests = 2
+    try:
+        codes = [_upload(sync_client, alice, JPEG + bytes([i])).status_code for i in range(4)]
+    finally:
+        runtime.settings.upload_rate_limit_requests = original
+    assert codes[:2] == [201, 201], codes
+    assert 429 in codes[2:], codes
+
+
+# --------------------------------------------------------------------------- #
+# interrupted upload / resume / duplicate protection
+# --------------------------------------------------------------------------- #
+
+def test_interrupted_upload_can_be_resumed(sync_client: TestClient):
+    alice = _register(sync_client)
+    payload = JPEG + b"payload-after-drop" * 4
+    init = sync_client.post("/api/v1/files/multipart/init", headers=_h(alice),
+                            json={"name": "resume.jpg", "kind": "photo",
+                                  "size": len(payload)}).json();
+    upload_id = init["upload_id"]
+
+    # The connection drops after the first part: completing now must fail and
+    # leave no half file behind.
+    sync_client.put(f"/api/v1/files/multipart/{upload_id}/parts/0", headers=_h(alice),
+                    content=payload[:100])
+    assert sync_client.post(f"/api/v1/files/multipart/{upload_id}/complete",
+                            headers=_h(alice)).status_code == 400
+
+    # Reconnect: resend the remainder, then the upload completes exactly once.
+    sync_client.put(f"/api/v1/files/multipart/{upload_id}/parts/1", headers=_h(alice),
+                    content=payload[100:])
+    done = sync_client.post(f"/api/v1/files/multipart/{upload_id}/complete", headers=_h(alice))
+    assert done.status_code == 201, done.text
+    assert sync_client.get(f"/api/v1/files/{done.json()['id']}/content",
+                           headers=_h(alice)).content == payload
+
+
+def test_duplicate_submission_creates_a_single_media_message(sync_client: TestClient):
+    alice, bob = _register(sync_client), _register(sync_client)
+    chat = _chat(sync_client, alice, bob)
+    file_id = _upload(sync_client, alice, JPEG).json()["id"]
+    body = {"type": "photo", "file_id": file_id, "client_message_id": "media-dup-1"}
+    first = sync_client.post(f"/api/v1/chats/{chat['id']}/messages", headers=_h(alice), json=body)
+    second = sync_client.post(f"/api/v1/chats/{chat['id']}/messages", headers=_h(alice), json=body)
+    assert first.status_code == 201 and second.status_code == 201
+    assert first.json()["id"] == second.json()["id"]
+
+    history = sync_client.get(f"/api/v1/chats/{chat['id']}/messages", headers=_h(bob)).json()
+    items = history["items"] if isinstance(history, dict) else history
+    assert len([m for m in items if m.get("file_id") == file_id]) == 1
+
+
+def test_failed_media_raises_a_websocket_event(sync_client: TestClient):
+    alice = _register(sync_client)
+    with sync_client.websocket_connect(f"/api/v1/ws?token={alice['access_token']}") as ws:
+        assert ws.receive_json()["type"] == "ready"
+        denied = _upload(sync_client, alice, PNG, kind="video", name="clip.mp4",
+                         mime="video/mp4")
+        assert denied.status_code == 415
+        seen = []
+        for _ in range(8):
+            frame = ws.receive_json()
+            seen.append(frame["type"])
+            if "media.failed" in seen:
+                break
+        assert "media.failed" in seen, seen
+
+
+def test_message_carries_file_metadata_for_the_bubble(sync_client: TestClient):
+    alice, bob = _register(sync_client), _register(sync_client)
+    chat = _chat(sync_client, alice, bob)
+    # a real 1x1 PNG so the server can record dimensions
+    one_pixel = bytes.fromhex(
+        "89504e470d0a1a0a0000000d494844520000000100000001080600000"
+        "01f15c4890000000a49444154789c6300010000050001"
+        "0d0a2db40000000049454e44ae426082"
+    )
+    uploaded = _upload(sync_client, alice, one_pixel, name="dot.png", mime="image/png").json()
+    assert uploaded["mime_type"] == "image/png"
+    assert uploaded["width"] == 1 and uploaded["height"] == 1
+
+    sync_client.post(f"/api/v1/chats/{chat['id']}/messages", headers=_h(alice),
+                     json={"type": "photo", "file_id": uploaded["id"], "text": "نقطه"})
+    page = sync_client.get(f"/api/v1/chats/{chat['id']}/messages", headers=_h(bob)).json()
+    media = [item for item in page["items"] if item.get("file")]
+    assert media, page
+    file_meta = media[0]["file"]
+    assert file_meta["name"] == "dot.png"
+    assert file_meta["size"] == len(one_pixel)
+    assert file_meta["mime_type"] == "image/png"
+    assert file_meta["width"] == 1 and file_meta["height"] == 1

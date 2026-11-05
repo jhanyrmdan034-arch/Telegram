@@ -97,6 +97,17 @@ def validate(kind: str, head: bytes, declared_mime: str | None) -> Sniffed:
     return detected
 
 
+def image_dimensions(path) -> tuple[int | None, int | None]:
+    """Width/height for images, so the client can lay the bubble out before download."""
+    try:
+        from PIL import Image  # optional dependency
+
+        with Image.open(path) as image:
+            return image.width, image.height
+    except Exception:
+        return None, None
+
+
 def safe_filename(name: str, fallback: str = "file") -> str:
     """No path separators, no control characters, no header injection."""
     cleaned = unicodedata.normalize("NFKC", name or "").replace("\\", "/").split("/")[-1]

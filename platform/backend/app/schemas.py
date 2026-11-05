@@ -275,6 +275,17 @@ class MessageUpdate(BaseModel):
     text: str = Field(min_length=1, max_length=8192)
 
 
+class FileBrief(BaseModel):
+    """Everything a bubble needs to lay itself out before the bytes arrive."""
+    id: uuid.UUID
+    name: str
+    mime_type: str
+    size: int
+    kind: str
+    width: int | None = None
+    height: int | None = None
+
+
 class MessageOut(APIModel):
     id: uuid.UUID
     chat_id: uuid.UUID
@@ -285,6 +296,7 @@ class MessageOut(APIModel):
     entities: list[dict[str, Any]] | None = None
     reply_to_id: uuid.UUID | None
     file_id: uuid.UUID | None
+    file: FileBrief | None = None
     meta: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
     edited_at: datetime | None = None
@@ -309,6 +321,12 @@ class MultipartOut(BaseModel):
     upload_id: str
     part_size: int
     max_parts: int
+
+
+class DownloadToken(BaseModel):
+    token: str
+    expires_at: datetime
+    url: str
 
 
 class FileOut(APIModel):

@@ -300,3 +300,25 @@ def account_usable(user: User) -> bool:
 def ensure_not_self(target: uuid.UUID, actor: uuid.UUID) -> None:
     if target == actor:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot target yourself")
+
+
+async def attach_file_payloads(db, payloads: list[dict]) -> None:
+    """Adds file metadata (name/size/mime/dimensions) next to each file_id."""
+    from sqlalchemy import select
+
+    from .models import File
+
+    ids = {payload["file_id"] for payload in payloads if payload.get("file_id")}
+    if not ids:
+        return
+    rows = {str(row.id): row for row in
+            (await db.execute(select(File).where(File.id.in_(ids)))).scalars().all()}
+    for payload in payloads:
+        record = rows.get(payload.get("file_id") or "")
+        if record is None:
+            continue
+        payload["file"] = {
+            "id": str(record.id), "name": record.name, "mime_type": record.mime_type,
+            "size": record.size, "kind": record.kind,
+            "width": record.width, "height": record.height,
+        }

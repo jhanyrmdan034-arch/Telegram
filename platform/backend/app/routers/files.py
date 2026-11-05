@@ -12,15 +12,35 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
 
 from ..deps import CurrentUser, DbDep, RuntimeDep
-from ..media import HEAD_BYTES, safe_filename, validate
+from datetime import UTC, datetime
+
+from ..file_tokens import issue as issue_download_token, verify as verify_download_token
+from ..media import HEAD_BYTES, image_dimensions, safe_filename, validate
 from ..models import ChatMember, File, Message
-from ..schemas import FileOut, MultipartInit, MultipartOut
+from ..ratelimit import RateLimiter
+from ..schemas import DownloadToken, FileOut, MultipartInit, MultipartOut
 from ..services import emit, member_ids
 from ..storage import iter_file
 
 router = APIRouter(prefix="/files", tags=["files"])
 
 ALLOWED_KINDS = {"photo", "video", "document", "voice", "sticker", "avatar", "other"}
+
+async def _enforce_upload_rate(runtime, user_id: uuid.UUID) -> None:
+    """Uploads get their own budget: they are far more expensive than a read."""
+    settings = runtime.settings
+    limiter = RateLimiter(runtime.limiter.store, settings.upload_rate_limit_requests,
+                          settings.upload_rate_limit_window_seconds)
+    await limiter.enforce(f"upload:{user_id}")
+
+
+async def _media_failed(runtime, user_id: uuid.UUID, reason: str, kind: str | None = None) -> None:
+    try:
+        await emit(runtime, [user_id], "media.failed", {"reason": reason, "kind": kind})
+    except Exception:  # pragma: no cover - telemetry must never break a request
+        pass
+
+
 
 
 @router.post("", response_model=FileOut, status_code=status.HTTP_201_CREATED)
@@ -34,6 +54,7 @@ async def upload_file(
 ):
     if kind not in ALLOWED_KINDS:
         raise HTTPException(status_code=422, detail=f"kind must be one of {sorted(ALLOWED_KINDS)}")
+    await _enforce_upload_rate(runtime, user.id)
 
     sniffed: dict[str, str] = {}
 
@@ -42,9 +63,15 @@ async def upload_file(
             sniffed["mime"] = validate(kind, head, file.content_type).mime
         except ValueError as error:
             # Nothing is committed yet: the temp file is discarded by save().
+            sniffed["error"] = str(error)
             raise HTTPException(status_code=415, detail=str(error)) from error
 
-    stored = await runtime.storage.save(file, runtime.settings.max_file_size_bytes, head_check)
+    try:
+        stored = await runtime.storage.save(file, runtime.settings.max_file_size_bytes, head_check)
+    except HTTPException as error:
+        if error.status_code in (413, 415):
+            await _media_failed(runtime, user.id, str(error.detail), kind)
+        raise
 
     # Same bytes, same owner, same kind: reuse the row instead of duplicating it.
     existing = (await db.execute(
@@ -54,6 +81,10 @@ async def upload_file(
     if existing is not None:
         return _file_out(existing, runtime)
 
+    width = height = None
+    if kind in ("photo", "avatar", "sticker"):
+        stored_path = runtime.storage.path_for(stored.storage_key)
+        width, height = image_dimensions(stored_path)
     record = File(
         owner_id=user.id,
         storage_key=stored.storage_key,
@@ -63,6 +94,8 @@ async def upload_file(
         size=stored.size,
         sha256=stored.sha256,
         kind=kind,
+        width=width,
+        height=height,
         is_public=is_public,
     )
     db.add(record)
@@ -81,8 +114,13 @@ def _file_out(record: File, runtime) -> FileOut:
     return out
 
 
-async def _can_access(db, file_record: File, user_id: uuid.UUID) -> bool:
-    if file_record.is_public or file_record.owner_id == user_id:
+async def _can_access(db, file_record: File, user_id: uuid.UUID, runtime=None) -> bool:
+    public_ok = False
+    if file_record.is_public:
+        # A public flag must never be a way around ownership checks unless the
+        # deployment explicitly opted in.
+        public_ok = bool(runtime and getattr(runtime.settings, "public_files_enabled", False))
+    if public_ok or file_record.owner_id == user_id:
         return True
     # Otherwise the requester must be a member of a chat where the file is used.
     result = await db.execute(
@@ -104,7 +142,7 @@ async def file_metadata(file_id: uuid.UUID, user: CurrentUser, db: DbDep, runtim
     record = await db.get(File, file_id)
     if record is None:
         raise HTTPException(status_code=404, detail="File not found")
-    if not await _can_access(db, record, user.id):
+    if not await _can_access(db, record, user.id, runtime):
         await _denied(db, runtime, user.id, record, "file.download_denied")
         raise HTTPException(status_code=403, detail="Access denied")
     return _file_out(record, runtime)
@@ -116,7 +154,7 @@ async def download_file(file_id: uuid.UUID, request: Request, user: CurrentUser,
     record = await db.get(File, file_id)
     if record is None:
         raise HTTPException(status_code=404, detail="File not found")
-    if not await _can_access(db, record, user.id):
+    if not await _can_access(db, record, user.id, runtime):
         await _denied(db, runtime, user.id, record, "file.download_denied")
         raise HTTPException(status_code=403, detail="Access denied")
 
@@ -211,6 +249,7 @@ async def multipart_init(payload: MultipartInit, user: CurrentUser, runtime: Run
     for kind in (payload.kind,):
         if kind not in ALLOWED_KINDS:
             raise HTTPException(status_code=422, detail=f"kind must be one of {sorted(ALLOWED_KINDS)}")
+    await _enforce_upload_rate(runtime, user.id)
     upload_id = uuid.uuid4().hex
     directory = _multipart_dir(runtime, upload_id)
     (directory / "meta.json").write_text(json.dumps({
@@ -279,8 +318,13 @@ async def multipart_complete(upload_id: str, user: CurrentUser, db: DbDep, runti
         except ValueError as error:
             raise HTTPException(status_code=415, detail=str(error)) from error
 
-    stored = await runtime.storage.save_temp(assembled, runtime.settings.max_file_size_bytes,
-                                             head_check)
+    try:
+        stored = await runtime.storage.save_temp(assembled, runtime.settings.max_file_size_bytes,
+                                                head_check)
+    except HTTPException as error:
+        if error.status_code in (413, 415):
+            await _media_failed(runtime, user.id, str(error.detail), meta["kind"])
+        raise
 
     existing = (await db.execute(
         select(File).where(File.owner_id == user.id, File.sha256 == stored.sha256,
@@ -291,9 +335,13 @@ async def multipart_complete(upload_id: str, user: CurrentUser, db: DbDep, runti
         _cleanup_multipart(directory)
         return _file_out(existing, runtime)
 
+    width = height = None
+    if meta["kind"] in ("photo", "avatar", "sticker"):
+        width, height = image_dimensions(runtime.storage.path_for(stored.storage_key))
     record = File(owner_id=user.id, storage_key=stored.storage_key, name=meta["name"],
                   mime_type=sniffed.get("mime", "application/octet-stream"), size=stored.size,
-                  sha256=stored.sha256, kind=meta["kind"], is_public=False)
+                  sha256=stored.sha256, kind=meta["kind"], width=width, height=height,
+                  is_public=False)
     db.add(record)
     await db.commit()
     await db.refresh(record)
@@ -309,3 +357,37 @@ def _cleanup_multipart(directory: Path) -> None:
     for path in directory.glob("*"):
         path.unlink(missing_ok=True)
     directory.rmdir()
+
+
+@router.post("/{file_id}/download-token", response_model=DownloadToken)
+async def download_token(file_id: uuid.UUID, user: CurrentUser, db: DbDep, runtime: RuntimeDep):
+    """Issues a short-lived, file-scoped URL for a caller who is already allowed."""
+    record = await db.get(File, file_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not await _can_access(db, record, user.id, runtime):
+        await _denied(db, runtime, user.id, record, "file.download_token_denied")
+        raise HTTPException(status_code=403, detail="Access denied")
+    token, expires_at = issue_download_token(runtime.settings, user.id, record.id)
+    return DownloadToken(token=token, expires_at=datetime.fromtimestamp(expires_at, UTC),
+                         url=(f"{runtime.settings.public_base_url}/api/v1/files/"
+                              f"{record.id}/stream?token={token}"))
+
+
+@router.get("/{file_id}/stream")
+async def stream_file(file_id: uuid.UUID, token: str, db: DbDep, runtime: RuntimeDep):
+    """Token-only download: the token itself carries and bounds the authorisation."""
+    user_id = verify_download_token(runtime.settings, token, file_id)
+    if user_id is None:
+        raise HTTPException(status_code=403, detail="Invalid or expired token")
+    record = await db.get(File, file_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not await _can_access(db, record, user_id, runtime):
+        raise HTTPException(status_code=403, detail="Access denied")
+    return StreamingResponse(iter_file(runtime.storage.path_for(record.storage_key)),
+                             media_type=record.mime_type,
+                             headers={"Content-Length": str(record.size),
+                                      "Content-Disposition":
+                                          f'inline; filename="{safe_filename(record.name)}"',
+                                      "X-Content-Type-Options": "nosniff"})

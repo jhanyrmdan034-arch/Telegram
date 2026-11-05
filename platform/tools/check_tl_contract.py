@@ -20,7 +20,7 @@ TLRPC = ROOT / "TMessagesProj/src/main/java/org/telegram/tgnet/TLRPC.java"
 CLIENT = ROOT / "TMessagesProj/src/main/java/org/telegram/platform"
 
 CLASS_DECL = re.compile(r"^\s{4}public static (?:abstract )?class (\w+)(?: extends ([\w.]+))?")
-FIELD_DECL = re.compile(r"^\s{8}public (?!static |final )([\w<>\[\].]+) (\w+);")
+FIELD_DECL = re.compile(r"^\s{8}public (?!static |final )([\w<>\[\].]+) (\w+)\s*(?:=[^;]*)?;")
 LOCAL_DECL = re.compile(r"TLRPC\.(\w+) (\w+)\s*=\s*new TLRPC\.\w+\(\)")
 PARAM_DECL = re.compile(r"\((?:[^()]|\([^()]*\))*\)")
 ASSIGNMENT = re.compile(r"\b(\w+)\.(\w+)\s*=(?!=)")

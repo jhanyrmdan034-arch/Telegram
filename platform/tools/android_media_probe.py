@@ -168,6 +168,53 @@ async def main() -> int:
         check("access revoked after the message is deleted",
               revoked.status_code == 403, str(revoked.status_code))
 
+        # the exact payload Android maps into a bubble
+        page = client.get(f"{BASE}/chats/{chat_id}/messages", headers=b).json()
+        with_file = [m for m in page["items"] if m.get("file")]
+        check("history rows carry file metadata for the bubble",
+              bool(with_file) and with_file[0]["file"]["mime_type"] == "image/jpeg",
+              str(with_file[:1]))
+
+        # token download (used by players / external downloaders)
+        token_resp = client.post(f"{BASE}/files/{photo_id}/download-token", headers=b)
+        ok = token_resp.status_code == 200
+        if ok:
+            streamed = client.get(token_resp.json()["url"])
+            ok = streamed.status_code == 200 and streamed.content == JPEG
+        check("short-lived download token streams the file", ok, token_resp.text)
+
+        # interrupted upload resumed after a reconnect
+        payload = JPEG + b"resume-body" * 8
+        session = client.post(f"{BASE}/files/multipart/init", headers=a,
+                              json={"name": "resume.jpg", "kind": "photo",
+                                    "size": len(payload)}).json()
+        client.put(f"{BASE}/files/multipart/{session['upload_id']}/parts/0", headers=a,
+                   content=payload[:60])
+        dropped = client.post(f"{BASE}/files/multipart/{session['upload_id']}/complete",
+                              headers=a)
+        client.put(f"{BASE}/files/multipart/{session['upload_id']}/parts/1", headers=a,
+                   content=payload[60:])
+        resumed = client.post(f"{BASE}/files/multipart/{session['upload_id']}/complete",
+                              headers=a)
+        check("an interrupted upload resumes and completes once",
+              dropped.status_code == 400 and resumed.status_code == 201,
+              f"{dropped.status_code}/{resumed.status_code}")
+
+        # duplicate submission of the same media message
+        dup_body = {"type": "photo", "file_id": photo_id, "client_message_id": "probe-dup"}
+        one = client.post(f"{BASE}/chats/{chat_id}/messages", headers=a, json=dup_body)
+        two = client.post(f"{BASE}/chats/{chat_id}/messages", headers=a, json=dup_body)
+        check("re-sending the same media message does not duplicate it",
+              one.json()["id"] == two.json()["id"])
+
+        # media.failed over the socket
+        async with websockets.connect(f"{WS}?token={alice['access_token']}") as sock:
+            await sock.recv()
+            client.post(f"{BASE}/files", headers=a,
+                        files={"file": ("bad.mp4", JPEG, "video/mp4")}, data={"kind": "video"})
+            failed_frame = await recv(sock, "media.failed", limit=6)
+            check("media.failed reaches the uploader", failed_frame is not None)
+
     print(f"\n{passed} passed, {failed} failed")
     return 0 if failed == 0 else 1
 

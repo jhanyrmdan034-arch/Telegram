@@ -28,6 +28,11 @@ class Settings(BaseSettings):
     storage_backend: str = "local"
     storage_dir: Path = Path("/var/lib/messenger/files")
     max_file_size_bytes: int = 200 * 1024 * 1024
+    # Public files would bypass ownership checks, so they are opt-in and off by default.
+    public_files_enabled: bool = False
+    upload_rate_limit_requests: int = 60
+    upload_rate_limit_window_seconds: int = 60
+    download_token_ttl_seconds: int = 300
     public_base_url: str = "http://localhost:8000"
 
     rate_limit_enabled: bool = True

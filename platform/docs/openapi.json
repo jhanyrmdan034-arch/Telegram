@@ -2422,6 +2422,106 @@
         }
       }
     },
+    "/api/v1/files/{file_id}/download-token": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Download Token",
+        "description": "Issues a short-lived, file-scoped URL for a caller who is already allowed.",
+        "operationId": "download_token_api_v1_files__file_id__download_token_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadToken"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/{file_id}/stream": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Stream File",
+        "description": "Token-only download: the token itself carries and bounds the authorisation.",
+        "operationId": "stream_file_api_v1_files__file_id__stream_get",
+        "parameters": [
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "File Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Token"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/calls/ice": {
       "get": {
         "tags": [
@@ -5733,6 +5833,87 @@
         "title": "DevLoginRequest",
         "description": "Development-only sign-in for a seeded test account."
       },
+      "DownloadToken": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "title": "Token"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token",
+          "expires_at",
+          "url"
+        ],
+        "title": "DownloadToken"
+      },
+      "FileBrief": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "mime_type": {
+            "type": "string",
+            "title": "Mime Type"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "mime_type",
+          "size",
+          "kind"
+        ],
+        "title": "FileBrief",
+        "description": "Everything a bubble needs to lay itself out before the bytes arrive."
+      },
       "FileOut": {
         "properties": {
           "id": {
@@ -6235,6 +6416,16 @@
               }
             ],
             "title": "File Id"
+          },
+          "file": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/FileBrief"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "meta": {
             "additionalProperties": true,

@@ -155,6 +155,7 @@ public final class DtoMapper {
                 message.fwd_from.from_id = origin;
             }
         }
+        org.telegram.platform.tl.PlatformMediaSync.applyMedia(message, json, dialogId);
         return message;
     }
 

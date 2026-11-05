@@ -1,123 +1,143 @@
 # فاز ۶ — رسانه و سیستم فایل (گزارش وضعیت)
 
-> این گزارش فقط چیزهایی را «انجام‌شده» می‌نامد که در همین محیط اجرا و تست شده‌اند.
-> کامپایل APK و اجرای Emulator در این محیط **ممکن نیست** (نه JDK/Android SDK، نه دسترسی به
+> فقط چیزهایی «انجام‌شده» نامیده می‌شوند که در همین محیط اجرا و تست شده‌اند.
+> **کامپایل APK و اجرای Emulator در این محیط ممکن نیست** (نه JDK/Android SDK و نه دسترسی به
 > `dl.google.com` / `repo1.maven.org` / `services.gradle.org` / `api.adoptium.net`).
 > بنابراین اعتبارسنجی در سطح API، کد و بررسی ایستا انجام شده است، نه اجرای واقعی اپ.
 
-## ۱) زیرساخت فایل سمت سرور — انجام‌شده و تست‌شده
+## ۱) زیرساخت فایل — تکمیل و تست‌شده
 
 | قابلیت | وضعیت | محل |
 |---|---|---|
-| آپلود تک‌مرحله‌ای با progress | ✅ | `POST /api/v1/files` |
-| آپلود چندبخشی (multipart) برای فایل بزرگ | ✅ | `POST /files/multipart/init` · `PUT /files/multipart/{id}/parts/{index}` · `POST /files/multipart/{id}/complete` |
-| تشخیص نوع واقعی محتوا از magic bytes | ✅ | `backend/app/media.py` (`sniff`, `validate`) |
-| رد محتوای ناهم‌خوان با kind (مثلاً ELF با ادعای عکس) | ✅ | همان‌جا، خطای ۴۱۵ |
-| سقف حجم (۲۰۰MB) در هر سه مسیر | ✅ | `settings.max_file_size_bytes` |
-| جلوگیری از آپلود تکراری | ✅ | همان مالک + همان sha256 + همان kind → همان رکورد |
-| نام فایل امن (بدون `"`/CRLF/مسیر) | ✅ | `safe_filename` |
-| ذخیره خارج از web root، با کلید محتوا (sha256) | ✅ | `LocalStorage` (قبلاً بود، حفظ شد) |
-| کنترل دسترسی در دانلود (مالک یا عضو چت دارای پیام) | ✅ | `_can_access` (قبلاً بود، حفظ شد) |
-| ثبت رویداد امنیتی برای رد دسترسی | ✅ | رویداد `file.download_denied` |
-| پاک‌سازی فایل‌های یتیم | ✅ | `python -m app.cli files-gc --older-than-hours 24` |
-| عدم افشای مسیر ذخیره‌سازی | ✅ | `download_url` فقط `/api/v1/files/{id}/content` |
+| آپلود تک‌مرحله‌ای با پیشرفت | ✅ | `POST /api/v1/files` |
+| آپلود چندبخشی (multipart) | ✅ | `POST /files/multipart/init` · `PUT .../parts/{index}` · `POST .../complete` |
+| تشخیص نوع واقعی از magic bytes | ✅ | `backend/app/media.py` |
+| رد محتوای ناهم‌خوان با kind | ✅ | `415` |
+| سقف حجم ۲۰۰MB در همه مسیرها | ✅ | `413` |
+| جلوگیری از آپلود تکراری | ✅ | مالک + sha256 + kind → همان رکورد |
+| نام فایل امن | ✅ | `safe_filename` |
+| ذخیره خارج از web root، کلید محتوایی | ✅ | `LocalStorage` |
+| کنترل دسترسی (مالک/عضو چت) | ✅ | `_can_access` |
+| بستن دورزدن با پرچم `is_public` | ✅ | فقط با `PUBLIC_FILES_ENABLED=true` (پیش‌فرض خاموش) |
+| توکن دانلود کوتاه‌عمر و فایل‌محور | ✅ | `POST /files/{id}/download-token` → `GET /files/{id}/stream?token=…` |
+| ثبت رویداد امنیتی رد دسترسی | ✅ | `file.download_denied` / `file.download_token_denied` |
+| محدودیت نرخ اختصاصی آپلود | ✅ | `UPLOAD_RATE_LIMIT_REQUESTS` (پیش‌فرض ۶۰/دقیقه به‌ازای هر حساب) |
+| ابعاد تصویر برای چیدمان حباب | ✅ | `width`/`height` با Pillow در آپلود و multipart |
+| هم‌خوانی حجم و صحت (sha256 + اندازه) | ✅ | در multipart پیش از commit |
+| پاک‌سازی فایل یتیم | ✅ | `python -m app.cli files-gc --older-than-hours 24` |
+| عدم افشای مسیر ذخیره‌سازی | ✅ | هیچ پاسخ API مسیر را برنمی‌گرداند |
 
-## ۲) رویدادهای Realtime — انجام‌شده
+## ۲) Realtime
 
-`media.uploaded` (به مالک)، `message.media` و `media.ready` (به اعضای چت هنگام ارسال پیام رسانه‌ای)
-و `media.deleted` (به اعضای چت‌هایی که آن فایل را داشتند). هر فریم شناسه یکتای خود را از
-لایه رویداد می‌گیرد؛ ارسال دوبارهٔ یک پیام، پیام تکراری نمی‌سازد (همان `id` پیام).
+| رویداد | وضعیت |
+|---|---|
+| `media.uploaded` | ✅ به مالک پس از آپلود |
+| `media.ready` | ✅ به اعضای چت هنگام ساخت پیام رسانه‌ای |
+| `media.failed` | ✅ به آپلودکننده در خطای ۴۱۳/۴۱۵ |
+| `message.media` | ✅ به اعضای چت (همان شناسه پیام، بدون تکرار) |
+| `media.deleted` | ✅ هنگام حذف فایل توسط مالک |
 
-`media.failed` فعلاً پیاده نشده است؛ خطای اعتبارسنجی به‌صورت پاسخ HTTP (415/413/400) به کلاینت
-برمی‌گردد و کلاینت آن را در UI خطا/تلاش دوباره نشان می‌دهد.
+هر فریم شناسه یکتای رویداد دارد. ارسال دوبارهٔ یک پیام (همان `client_message_id`) پیام دوم
+نمی‌سازد؛ آپلود دوبارهٔ همان بایت‌ها فایل دوم نمی‌سازد.
 
 ## ۳) سمت اندروید
 
-- `platform/repo/MediaRepository.java` (جدید): آپلود استریمی با `HttpURLConnection`، گزارش پیشرفت،
-  لغو در میانهٔ کار (`Cancel`)، آپلود چندبخشی خودکار برای فایل > ۸MB، دانلود استریمی با کش و ETag
-  سمت سرور، تلاش دوباره با فراخوانی مجدد (سرور خودش dedupe می‌کند).
-- `platform/tl/PlatformMediaSync.java` (جدید): `sendMedia()` (آپلود → ساخت پیام با `file_id`)،
-  `cancelUpload(path)`، `download(fileId, progress, callback)`، کش
-  `cacheDir/platform_media/{fileId}.bin`، اعلام پیشرفت با همان نوتیفیکیشن
-  `NotificationCenter.fileUploadProgressChanged` که آپلودر اصلی تلگرام استفاده می‌کند.
-- `SendMessagesHelper.sendMessage`: شاخهٔ `isPlatformMedia(...)` **قبل از** هر مسیر MTProto؛
-  عکس و سند (بدون ویرایش ویدیو/نظرسنجی) از مسیر پلتفرم می‌روند. سایر انواع دست‌نخورده مانده‌اند.
-- `BuildVars.MEDIA_FROM_PLATFORM = BuildConfig.DEBUG` (مثل فازهای قبل، فقط debug).
-- `PlatformBridge.media()` در دسترس کنترلرها قرار گرفت.
+- `platform/repo/MediaRepository.java` (جدید): آپلود استریمی با پیشرفت، **لغو**، multipart خودکار
+  برای > ۸MB، دانلود استریمی با کش، تلاش دوباره با فراخوانی مجدد.
+- `platform/tl/PlatformMediaSync.java` (جدید):
+  - `sendMedia()`: آپلود → ساخت پیام با `file_id` از مسیر واقعی `sendMessage`.
+  - `applyMedia(message, row, dialogId)`: تبدیل ردیف بک‌اند به ساختار TL موجود —
+    عکس: `TL_messageMediaPhoto` + `TL_photoSize` با ابعاد واقعی؛
+    سند/ویدیو: `TL_messageMediaDocument` با `TL_document`، نام فایل، حجم، MIME و
+    `TL_documentAttributeFilename` / `ImageSize` / `Video` تا کارت سند بدون شبکه ساخته شود.
+  - دانلود خودکار به `cacheDir/platform_media/{fileId}.ext` و ست‌کردن `attachPath`.
+  - `cancelUpload(path)` و `uploadProgress(path)`؛ پیشرفت در نقشه‌ای محلی نگه داشته می‌شود
+    (کانال `fileUploadProgressChanged` تلگرام آرگومان `ImageLocation` می‌خواهد و با کلید مسیر
+    ما کرش می‌کرد، بنابراین عمداً استفاده نشد).
+- `platform/mapper/DtoMapper.java`: هر پیام رسانه‌ای از `applyMedia` عبور می‌کند.
+- `SendMessagesHelper.sendMessage`: شاخهٔ `isPlatformMedia(...)` **قبل از** هر MTProto برای عکس و سند.
+- `BuildVars.MEDIA_FROM_PLATFORM = BuildConfig.DEBUG`، `PlatformBridge.media()`.
 
-## ۴) تست‌های اجراشده (همه واقعی، روی همین محیط)
+## ۴) تست‌ها (اجراشده در همین محیط)
 
-- `backend/tests/test_media_phase6.py` — **۱۳ تست، همه سبز**: sniff و kind، رد محتوای دروغگو،
-  پاک‌سازی نام فایل، dedupe، رد kind ناشناخته، دانلود عضو/رد غریبه، قطع دسترسی پس از حذف پیام،
-  multipart کامل، multipart فقط-مالک، عدم تطابق حجم، سقف حجم، رویدادهای `media.uploaded`
-  و `message.media`/`media.ready`، و `media.deleted`.
-- کل مجموعهٔ بک‌اند: **۱۶۳ تست سبز** (بدون رگرسیون نسبت به ۱۵۰ قبلی؛ تست dedupe در
-  `test_files.py` مطابق رفتار جدید به‌روزرسانی شد).
-- `tools/android_media_probe.py` روی سرور زنده با `demo_alice` / `demo_bob` و یک حساب سوم:
-  **۱۶ از ۱۶ موفق** — آپلود عکس با نوع sniff‌شده، ساخت پیام، دریافت `message.new` +
-  `message.media` + `media.ready`، دانلود توسط گیرنده، رد حساب خارجی (۴۰۳)، ویدیو، سند با
-  نام/حجم/MIME، رد محتوای دروغگو، سقف حجم، تلاش دوباره پس از خطا، عدم آپلود تکراری،
-  لغو آپلود نیمه‌کاره (فایلی ساخته نمی‌شود)، قطع دسترسی پس از حذف پیام.
-- بررسی‌های ایستا: `check_android_phase1.py` ✅ (۱۰۲ operation در OpenAPI)،
-  `check_tl_contract.py` ✅، `check_dialogs_no_mtproto.py` ✅،
-  `check_chat_no_mtproto.py` ✅ — حالا **۱۴ نقطهٔ ورود**، شامل «ارسال رسانه»، و بررسی اینکه
-  `PlatformMediaSync`/`MediaRepository` هیچ نماد MTProto (`ConnectionsManager`, `TLRPC.`,
-  `FileLoader`, `MessagesStorage`) ندارند.
-- `javalang` روی ۴ فایل تغییریافته/جدید جاوا: parse موفق (بدون کامپایل واقعی).
+- `backend/tests/test_media_phase6.py` — **۲۱ تست سبز**: sniff/kind، رد محتوای دروغگو،
+  sanitize نام، dedupe، رد kind ناشناخته، دانلود عضو، رد غریبه (IDOR)، قطع دسترسی پس از حذف پیام،
+  multipart کامل/فقط‌مالک/عدم تطابق حجم/سقف حجم، آپلود نیمه‌کاره و **ازسرگیری پس از قطع**،
+  جلوگیری از پیام تکراری، `media.failed` روی WebSocket، `media.uploaded`،
+  `message.media` + `media.ready`، `media.deleted`، توکن دانلود (فایل‌محور/دستکاری‌شده/منقضی/
+  بی‌مجوز)، بستن دورزدن `is_public`، سهمیهٔ آپلود، و متادیتای فایل در History (همان چیزی که
+  اندروید برای ساخت حباب می‌خواند).
+- کل مجموعهٔ بک‌اند: **۱۷۱ تست سبز** (بدون رگرسیون؛ ۱۵۰ → ۱۶۳ → ۱۷۱).
+- `tools/android_media_probe.py` روی سرور زنده با `demo_alice`/`demo_bob` + حساب سوم:
+  **۲۱ از ۲۱ موفق** (شامل دریافت `message.new`+`message.media`+`media.ready`، دانلود عضو،
+  رد غریبه، ویدیو، سند با نام/حجم/MIME، رد محتوای دروغگو، سقف حجم، تلاش دوباره، عدم آپلود تکراری،
+  لغو آپلود نیمه‌کاره، ازسرگیری پس از قطع، عدم تکرار پیام، `media.failed`، متادیتای فایل در
+  History، توکن دانلود، و قطع دسترسی پس از حذف پیام).
+- پروب‌های رگرسیون فازهای قبل: `android_chat_probe` **۱۲/۱۲**، `android_contacts_probe` **۱۵/۱۵**.
+- بررسی‌های ایستا: `check_android_phase1` ✅ (**۱۰۴ operation** / ۶۳ schema)،
+  `check_tl_contract` ✅ (فیلدهای ارث‌بری‌شدهٔ TL هم اکنون بررسی می‌شوند)،
+  `check_dialogs_no_mtproto` ✅، `check_chat_no_mtproto` ✅ (**۱۴ نقطهٔ ورود**؛
+  `MediaRepository` هیچ نماد MTProto ندارد و `PlatformMediaSync` فقط ساختار TL محلی می‌سازد).
+- `javalang` روی فایل‌های جدید/تغییریافتهٔ جاوا: parse موفق (بدون کامپایل واقعی).
 
-## ۵) وابستگی‌های MTProto که هنوز باقی‌اند
+## ۵) وابستگی‌های باقی‌مانده به MTProto
 
-- صدا (voice)، استیکر، GIF، موقعیت مکانی، نظرسنجی: مسیر اصلی تلگرام دست‌نخورده است.
-- ویدیوی دارای `videoEditedInfo` (ترنسکد/برش) هنوز از مسیر تلگرام می‌رود.
+- صدا (voice)، استیکر، GIF، موقعیت، نظرسنجی: مسیر اصلی دست‌نخورده.
+- ویدیوی دارای `videoEditedInfo` (ترنسکد/برش) از مسیر تلگرام می‌رود.
 - فوروارد رسانه، پیام زمان‌بندی‌شده، چت مخفی، ربات‌ها، ترجمه: دست‌نخورده.
-- بارگذاری آواتار از UI به endpoint پلتفرم وصل نیست (فقط نمایش).
+- آواتار: بارگذاری از UI به endpoint پلتفرم وصل نیست (فقط نمایش).
 
-## ۶) محدودیت‌ها و کارهای ناتمام (صادقانه)
+## ۶) استیکر و ایموجی
 
-1. **نمایش حباب رسانه در چت تأیید نشده است**: دانلود به کش و ست‌کردن مسیر محلی پیاده شده، اما
-   رندر تصویر/ویدیو داخل حباب به `ImageLocation`/`MessageObject` تلگرام وابسته است و بدون
-   کامپایل و اجرا نمی‌توان ادعا کرد درست کار می‌کند.
-2. **نوار پیشرفت آپلود**: رویداد پیشرفت با همان نوتیفیکیشن استاندارد منتشر می‌شود، اما اتصال آن به
-   حباب/اکشن‌بار تأیید نشده است. نوار پیشرفت دانلود به UI وصل نیست.
-3. **لغو و تلاش دوباره** در سطح Repository کامل و تست‌شده است (لغو آپلود نیمه‌کاره سمت سرور
-   فایلی نمی‌سازد)، اما دکمهٔ «لغو»/«تلاش دوباره» در UI به آن وصل نشده است.
-4. دوربین، انتخاب از گالری و انتخاب فایل: هیچ صفحهٔ جدیدی ساخته نشد؛ مسیر موجود
-   `sendMessage` عکس/سند را به پلتفرم می‌برد، ولی انتخاب‌گر جدید اضافه نشده است.
-5. استیکر/ایموجی: بررسی شد؛ زیرساخت مستقل و قابل‌اعتماد برای استیکر وجود ندارد، بنابراین
-   هیچ استیکری از API رسمی تلگرام استفاده نشده و قابلیت جدیدی هم اضافه نشده است؛ استیکر
-   سفارشی/انیمیشنی به مرحلهٔ جدا موکول می‌شود.
+معماری فعلی تلگرام برای استیکر به `MediaDataController` + `StickerSet`هایی وابسته است که از
+سرورهای تلگرام می‌آیند؛ هیچ زیرساخت مستقل و قابل‌اتکایی برای استیکر در بک‌اند ما وجود ندارد
+(نه جدول sticker set، نه endpoint، نه مجوز فایل). بنابراین:
+- هیچ استیکری از API/سرور رسمی تلگرام استفاده نشد؛
+- هیچ استیکر پرمیومی کپی نشد؛
+- قابلیت استیکر **اضافه نشد** و به‌عنوان «پشتیبانی کامل» ادعا نمی‌شود؛
+- ایموجی سفارشی/متحرک (AnimatedEmoji) هم به مرحلهٔ مستقل موکول شد.
 
-## ۷) بررسی امنیتی
+## ۷) محدودیت‌ها و کارهای ناتمام (صادقانه)
 
-- IDOR: دانلود با بررسی مالکیت/عضویت چت؛ آپلود چندبخشی مقید به مالک همان `upload_id`
-  (تست `403` برای حساب دیگر).
-- محتوای جعلی: نوع از بایت‌ها تشخیص داده می‌شود، نه از هدر کلاینت؛ نوع اعلامی فقط برای
-  رد کردن استفاده می‌شود.
-- تزریق هدر در نام فایل: نام پاک‌سازی می‌شود (`Content-Disposition` امن).
-- افشای مسیر: هیچ پاسخ API مسیر ذخیره‌سازی را برنمی‌گرداند.
-- Rate limiting: محدودیت عمومی ۳۰۰ درخواست/دقیقه روی همهٔ مسیرها فعال است؛ محدودیت
-  **اختصاصی آپلود** اضافه نشده — به‌عنوان کار باقی‌مانده ثبت می‌شود.
-- نکتهٔ باقی‌مانده: پرچم `is_public` روی فایل هنوز می‌تواند کنترل دسترسی را دور بزند
-  (`_can_access` برای فایل عمومی همیشه true است)؛ در این فاز استفاده نمی‌شود ولی توصیه
-  می‌شود در فاز بعد محدود یا حذف شود.
-- `media.failed` به‌صورت رویداد WebSocket پیاده نشده (پیام خطای HTTP جای آن را گرفته است).
+1. **رندر نهایی حباب رسانه تأیید نشده**: ساختار TL، ابعاد و `attachPath` ساخته می‌شود و کارت
+   سند باید بومی رندر شود، اما بدون کامپایل/اجرا نمی‌توان گفت تصویر داخل حباب درست نمایش
+   داده می‌شود.
+2. **نوار پیشرفت آپلود/دانلود در UI وصل نشده**: پیشرفت در Repository و `uploadProgress()` موجود
+   است، اما هیچ ویویی به آن bind نشده (کانال پیشرفت تلگرام با کلید مسیر محلی سازگار نبود).
+3. **دکمه‌های لغو/تلاش دوباره در UI وصل نشده‌اند**؛ منطق آن‌ها (لغو واقعی، تلاش دوباره) پیاده و
+   تست شده است.
+4. **دوربین/گالری/انتخاب فایل**: هیچ صفحهٔ جدیدی ساخته نشد؛ مسیر موجود `sendMessage` عکس و سند
+   را به پلتفرم می‌برد، اما انتخاب‌گر/مجوز دوربین به‌صورت اختصاصی اضافه نشده است.
+5. پیش‌نمایش قبل از ارسال و ویدیوی داخل چت (پخش) کامپایل/اجرا نشده‌اند.
 
-## ۸) فایل‌های تغییر‌یافته/جدید
+## ۸) بررسی امنیتی
 
-جدید: `backend/app/media.py`، `backend/tests/test_media_phase6.py`، `tools/android_media_probe.py`,
-`platform/repo/MediaRepository.java`، `platform/tl/PlatformMediaSync.java`، همین گزارش.
+- IDOR: دانلود با بررسی مالکیت/عضویت؛ multipart مقید به مالک `upload_id`؛ توکن دانلود
+  فایل‌محور و کاربر‌محور با HMAC و انقضا (تست دستکاری/انقضا/فایل دیگر).
+- محتوای جعلی: نوع از بایت‌ها تعیین می‌شود؛ ادعای کلاینت فقط برای رد کردن به کار می‌رود.
+- هدر: نام فایل پاک‌سازی می‌شود؛ `X-Content-Type-Options: nosniff` روی استریم.
+- افشای مسیر: هیچ API مسیر ذخیره‌سازی را برنمی‌گرداند.
+- نرخ: محدودیت عمومی ۳۰۰/دقیقه + سهمیهٔ آپلود ۶۰/دقیقه به‌ازای حساب.
+- باقی‌مانده: پرچم `is_public` هنوز در دیتابیس است (پیش‌فرض خاموش و در `_can_access` بی‌اثر)؛
+  پیشنهاد حذف کامل در فاز بعد. `media.failed` فقط به آپلودکننده می‌رود (نه به چت).
 
-تغییر‌یافته: `backend/app/storage.py` (اعتبارسنجی پیش از commit + `save_temp`)،
-`backend/app/routers/files.py` (sniff/dedupe/multipart/رویدادها/لاگ امنیتی)،
-`backend/app/routers/messages.py` (`message.media`، `media.ready`)، `backend/app/schemas.py`
-(`MultipartInit`/`MultipartOut`)، `backend/app/cli.py` (`files-gc`)،
-`backend/tests/test_files.py` (قرارداد dedupe)، `tools/check_chat_no_mtproto.py` (نقاط ورود رسانه)،
-`docs/openapi.json` (۱۰۲ عملیات / ۶۱ schema)، `messenger/SendMessagesHelper.java`،
-`messenger/BuildVars.java`، `platform/PlatformBridge.java`.
+## ۹) فایل‌های جدید/تغییریافته
 
-## ۹) جمع‌بندی وضعیت
+جدید: `backend/app/media.py`، `backend/app/file_tokens.py`، `backend/tests/test_media_phase6.py`،
+`tools/android_media_probe.py`، `platform/repo/MediaRepository.java`،
+`platform/tl/PlatformMediaSync.java`، همین گزارش.
 
-زیرساخت فایل سمت سرور (آپلود، اعتبارسنجی، چندبخشی، کنترل دسترسی، رویدادها، پاک‌سازی یتیم)
-**پیاده‌سازی و تست شده است**. اتصال اندروید در سطح Repository و شاخهٔ ارسال **نوشته و
-از نظر ایستا بررسی شده**، اما **نمایش نهایی حباب رسانه، نوار پیشرفت و دکمه‌های لغو/تلاش دوباره
-در اپ کامپایل و اجرا نشده‌اند** و بنابراین «کامل» اعلام نمی‌شوند.
+تغییریافته: `backend/app/storage.py`، `backend/app/routers/files.py`،
+`backend/app/routers/messages.py`، `backend/app/schemas.py` (`MultipartInit`, `MultipartOut`,
+`DownloadToken`, `FileBrief`)، `backend/app/services.py` (`attach_file_payloads`)،
+`backend/app/config.py`، `backend/app/cli.py`، `backend/tests/test_files.py`،
+`tools/check_chat_no_mtproto.py`، `tools/check_tl_contract.py`، `docs/openapi.json`،
+`messenger/SendMessagesHelper.java`، `messenger/BuildVars.java`، `platform/PlatformBridge.java`،
+`platform/mapper/DtoMapper.java`.
+
+## ۱۰) جمع‌بندی
+
+زیرساخت فایل و رسانه سمت سرور (آپلود، اعتبارسنجی، multipart، توکن دانلود، سهمیهٔ نرخ،
+کنترل دسترسی، رویدادها، پاک‌سازی) **تکمیل و تست شده** است. اتصال اندروید در سطح Repository،
+مسیر ارسال و ساخت ساختار رسانه **نوشته و از نظر ایستا بررسی شده**، اما نمایش نهایی حباب،
+نوار پیشرفت، لغو/تلاش دوباره در UI و پخش ویدیو **اعتبارسنجی APK نشده‌اند**.

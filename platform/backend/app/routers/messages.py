@@ -9,8 +9,10 @@ from sqlalchemy import select
 
 from ..deps import CurrentUser, DbDep, RuntimeDep
 from ..models import ChatMember, File, Message
-from ..schemas import ForwardRequest, MessageCreate, MessageOut, MessagePage, MessageUpdate
+from ..schemas import (FileBrief, ForwardRequest, MessageCreate, MessageOut, MessagePage,
+                       MessageUpdate)
 from ..services import (
+    attach_file_payloads,
     emit,
     member_ids,
     message_payload,
@@ -79,11 +81,13 @@ async def send_message(chat_id: uuid.UUID, payload: MessageCreate, user: Current
     await db.refresh(message)
 
     recipients = await member_ids(db, chat_id)
-    await emit(runtime, recipients, "message.new", message_payload(message))
+    payload_out = message_payload(message)
+    await attach_file_payloads(db, [payload_out])
+    await emit(runtime, recipients, "message.new", payload_out)
     if message.file_id is not None:
         # Media gets its own event so a client can fetch the file before the bubble
         # needs it, without duplicating the message (same message id, same frame id).
-        await emit(runtime, recipients, "message.media", message_payload(message))
+        await emit(runtime, recipients, "message.media", payload_out)
         await emit(runtime, recipients, "media.ready", {
             "file_id": str(message.file_id), "message_id": str(message.id),
             "chat_id": str(chat_id),
@@ -124,6 +128,17 @@ async def get_messages(
     rows = rows[:limit]
     ordered = rows if after_seq is not None else list(reversed(rows))
     items = [MessageOut.model_validate(m) for m in ordered]
+    file_ids = {item.file_id for item in items if item.file_id}
+    if file_ids:
+        files = {row.id: row for row in (await db.execute(
+            select(File).where(File.id.in_(file_ids))
+        )).scalars().all()}
+        for item in items:
+            record = files.get(item.file_id) if item.file_id else None
+            if record is not None:
+                item.file = FileBrief(id=record.id, name=record.name,
+                                      mime_type=record.mime_type, size=record.size,
+                                      kind=record.kind, width=record.width, height=record.height)
     next_before = rows[-1].seq if has_more and rows and after_seq is None else None
     return MessagePage(items=items, next_before_seq=next_before)
 
