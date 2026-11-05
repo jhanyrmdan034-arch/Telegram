@@ -4428,6 +4428,18 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         });
     }
 
+    private static boolean isPlatformMedia(SendMessageParams params) {
+        if (params == null || params.path == null || params.path.isEmpty()) {
+            return false;
+        }
+        if (params.photo == null && params.document == null) {
+            return false;
+        }
+        // Videos and round videos keep the original pipeline until the media phase
+        // covers transcoding; stills and documents are already supported.
+        return params.videoEditedInfo == null && params.poll == null && params.game == null;
+    }
+
     private static boolean isPlainText(SendMessageParams params) {
         return params != null && params.message != null && !params.message.isEmpty()
                 && params.photo == null && params.document == null && params.location == null
@@ -4436,6 +4448,16 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     public void sendMessage(SendMessageParams sendMessageParams) {
+        if (org.telegram.platform.tl.PlatformMediaSync.isEnabled()
+                && isPlatformMedia(sendMessageParams)) {
+            // The picker already produced a local file: upload it, then the server
+            // creates the message and fans it out over the socket.
+            org.telegram.platform.tl.PlatformMediaSync.sendMedia(sendMessageParams.peer,
+                    new java.io.File(sendMessageParams.path),
+                    sendMessageParams.photo != null ? "photo" : "document",
+                    sendMessageParams.message, null);
+            return;
+        }
         if (org.telegram.platform.tl.PlatformChatSync.isEnabled() && isPlainText(sendMessageParams)) {
             // Text goes to our backend; media still follows the original path
             // until the media phase.

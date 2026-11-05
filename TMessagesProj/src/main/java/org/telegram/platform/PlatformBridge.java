@@ -49,6 +49,7 @@ public final class PlatformBridge {
     private final ChatRepository chats;
     private final MessageRepository messages;
     private final org.telegram.platform.repo.UserRepository users;
+    private final org.telegram.platform.repo.MediaRepository media;
     private final ExecutorService executor = Executors.newFixedThreadPool(3, r -> {
         Thread thread = new Thread(r, "platform-io");
         thread.setDaemon(true);
@@ -67,6 +68,7 @@ public final class PlatformBridge {
         this.chats = new ChatRepository(api, localStore, executor);
         this.messages = new MessageRepository(api, localStore, realtime, executor);
         this.users = new org.telegram.platform.repo.UserRepository(api, executor);
+        this.media = new org.telegram.platform.repo.MediaRepository(api, executor);
 
         realtime.setListener(new RealtimeClient.EventListener() {
             @Override
@@ -168,6 +170,10 @@ public final class PlatformBridge {
 
     public ChatRepository chats() {
         return chats;
+    }
+
+    public org.telegram.platform.repo.MediaRepository media() {
+        return media;
     }
 
     public org.telegram.platform.repo.UserRepository users() {

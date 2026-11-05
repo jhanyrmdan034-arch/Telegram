@@ -15,7 +15,7 @@ JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram"
 MT_PROTO = ("sendRequest", "ConnectionsManager", "getMessagesStorage(", "MessagesStorage.getInstance",
             "TLRPC.TL_messages_")
 GUARD = ("PlatformChatSync.isEnabled()", "PlatformDialogsSync.isEnabled()",
-         "PlatformContactsSync.isEnabled()")
+         "PlatformContactsSync.isEnabled()", "PlatformMediaSync.isEnabled()")
 
 SEAMS = [
     ("ui/DialogsActivity.java", "public static void loadDialogs(AccountInstance accountInstance)", "dialog list load"),
@@ -47,6 +47,8 @@ SEAMS = [
      "public void loadFullUser(final TLRPC.User user, int classGuid, boolean force)", "profile load"),
     ("ui/Adapters/SearchAdapter.java",
      "public void searchDialogs(final String query)", "global search"),
+    ("messenger/SendMessagesHelper.java", "public void sendMessage(SendMessageParams sendMessageParams)",
+     "send media (photo/document)"),
 ]
 
 
@@ -83,11 +85,17 @@ def main() -> int:
             problems.append(f"{label}: platform branch after an MTProto call")
 
     for name in ("PlatformChatSync.java", "PlatformDialogsSync.java", "PlatformDialogActions.java",
-                 "PlatformAvatars.java"):
+                 "PlatformAvatars.java", "PlatformContactsSync.java"):
         source = (JAVA / "platform/tl" / name).read_text(encoding="utf-8")
         for marker in ("ConnectionsManager", "sendRequest(", "MessagesStorage"):
             if marker in source:
                 problems.append(f"tl/{name}: uses MTProto symbol {marker}")
+
+    for relative in ("platform/tl/PlatformMediaSync.java", "platform/repo/MediaRepository.java"):
+        source = (JAVA / relative).read_text(encoding="utf-8")
+        for marker in ("ConnectionsManager", "sendRequest(", "MessagesStorage", "TLRPC.", "FileLoader"):
+            if marker in source:
+                problems.append(f"{relative}: uses MTProto symbol {marker}")
 
     print("== problems ==" if problems else
           f"OK: {len(SEAMS)} chat/dialog entry points branch out before MTProto")

@@ -77,6 +77,38 @@ async def _check() -> None:
     await engine.dispose()
 
 
+async def _files_gc(older_than_hours: int) -> None:
+    """Deletes stored objects that no message points at any more."""
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from .models import File, Message
+    from .storage import LocalStorage
+
+    settings = get_settings()
+    engine = create_engine(settings)
+    factory = get_session_factory(settings)
+    storage = LocalStorage(settings.storage_dir)
+    cutoff = datetime.now(UTC) - timedelta(hours=older_than_hours)
+    removed = 0
+    async with factory() as db:
+        used = set((await db.execute(
+            select(Message.file_id).where(Message.file_id.is_not(None))
+        )).scalars().all())
+        for record in (await db.execute(select(File))).scalars().all():
+            if record.id in used or record.is_public:
+                continue
+            if record.created_at and record.created_at > cutoff:
+                continue
+            await storage.delete(record.storage_key)
+            await db.delete(record)
+            removed += 1
+        await db.commit()
+    await engine.dispose()
+    print(f"files-gc: removed {removed} orphaned file(s)")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="app.cli")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -90,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("seed-demo", help="create the development test accounts (needs DEV_LOGIN_ENABLED)")
     sub.add_parser("check", help="verify database connectivity")
+    gc = sub.add_parser("files-gc", help="delete stored files no message references any more")
+    gc.add_argument("--older-than-hours", type=int, default=24)
 
     args = parser.parse_args(argv)
     if args.command == "seed":
@@ -100,6 +134,8 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(_seed_demo())
     elif args.command == "check":
         asyncio.run(_check())
+    elif args.command == "files-gc":
+        asyncio.run(_files_gc(args.older_than_hours))
     else:  # pragma: no cover
         parser.error("unknown command")
     return 0

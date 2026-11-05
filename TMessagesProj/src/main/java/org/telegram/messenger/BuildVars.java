@@ -43,6 +43,9 @@ public class BuildVars {
 
     /** Contacts, profiles and global search served by our backend. */
     public static final boolean CONTACTS_FROM_PLATFORM = BuildConfig.DEBUG;
+
+    /** Photos, videos and documents through our own file store. */
+    public static final boolean MEDIA_FROM_PLATFORM = BuildConfig.DEBUG;
     public static final String[][] DEV_LOGIN_ACCOUNTS = {
             {"10001", "demo_alice"},
             {"10002", "demo_bob"},

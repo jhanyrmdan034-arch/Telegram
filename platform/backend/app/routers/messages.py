@@ -78,7 +78,16 @@ async def send_message(chat_id: uuid.UUID, payload: MessageCreate, user: Current
     await db.commit()
     await db.refresh(message)
 
-    await emit(runtime, await member_ids(db, chat_id), "message.new", message_payload(message))
+    recipients = await member_ids(db, chat_id)
+    await emit(runtime, recipients, "message.new", message_payload(message))
+    if message.file_id is not None:
+        # Media gets its own event so a client can fetch the file before the bubble
+        # needs it, without duplicating the message (same message id, same frame id).
+        await emit(runtime, recipients, "message.media", message_payload(message))
+        await emit(runtime, recipients, "media.ready", {
+            "file_id": str(message.file_id), "message_id": str(message.id),
+            "chat_id": str(chat_id),
+        })
     return message
 
 

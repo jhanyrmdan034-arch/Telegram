@@ -34,8 +34,9 @@ async def test_content_addressing_deduplicates(client, alice):
     second = (await client.post("/api/v1/files", headers=auth(alice["access_token"]),
                                 files={"file": ("b.txt", b"same bytes", "text/plain")},
                                 data=payload)).json()
-    # Distinct records, but the same stored object.
-    assert first["id"] != second["id"]
+    # Phase 6: the same owner re-uploading the same bytes gets the same record back
+    # (duplicate-upload avoidance), and only one object exists on disk.
+    assert first["id"] == second["id"]
     assert first["sha256"] == second["sha256"]
 
     from pathlib import Path

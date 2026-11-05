@@ -298,6 +298,19 @@ class MessagePage(BaseModel):
 # --------------------------------------------------------------------------- #
 # Files
 # --------------------------------------------------------------------------- #
+class MultipartInit(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    kind: Literal["photo", "video", "document", "voice", "sticker", "avatar", "other"] = "document"
+    size: int = Field(gt=0)
+    mime_type: str | None = Field(default=None, max_length=128)
+
+
+class MultipartOut(BaseModel):
+    upload_id: str
+    part_size: int
+    max_parts: int
+
+
 class FileOut(APIModel):
     id: uuid.UUID
     name: str

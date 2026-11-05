@@ -2271,6 +2271,157 @@
         }
       }
     },
+    "/api/v1/files/multipart/init": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Multipart Init",
+        "operationId": "multipart_init_api_v1_files_multipart_init_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MultipartInit"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MultipartOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ]
+      }
+    },
+    "/api/v1/files/multipart/{upload_id}/parts/{index}": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Multipart Part",
+        "operationId": "multipart_part_api_v1_files_multipart__upload_id__parts__index__put",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Index"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Multipart Part Api V1 Files Multipart  Upload Id  Parts  Index  Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/files/multipart/{upload_id}/complete": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Multipart Complete",
+        "operationId": "multipart_complete_api_v1_files_multipart__upload_id__complete_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "upload_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Upload Id"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/calls/ice": {
       "get": {
         "tags": [
@@ -6163,6 +6314,76 @@
           "text"
         ],
         "title": "MessageUpdate"
+      },
+      "MultipartInit": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 255,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "photo",
+              "video",
+              "document",
+              "voice",
+              "sticker",
+              "avatar",
+              "other"
+            ],
+            "title": "Kind",
+            "default": "document"
+          },
+          "size": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Size"
+          },
+          "mime_type": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 128
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mime Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "size"
+        ],
+        "title": "MultipartInit"
+      },
+      "MultipartOut": {
+        "properties": {
+          "upload_id": {
+            "type": "string",
+            "title": "Upload Id"
+          },
+          "part_size": {
+            "type": "integer",
+            "title": "Part Size"
+          },
+          "max_parts": {
+            "type": "integer",
+            "title": "Max Parts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "upload_id",
+          "part_size",
+          "max_parts"
+        ],
+        "title": "MultipartOut"
       },
       "OtpChallenge": {
         "properties": {

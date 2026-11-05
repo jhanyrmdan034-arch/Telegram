@@ -26,7 +26,29 @@ class StoredObject:
 
 
 class Storage(Protocol):
-    async def save(self, file: UploadFile, max_size: int) -> StoredObject: ...
+    async def save(self, file: UploadFile, max_size: int, head_check=None) -> StoredObject: ...
+    async def save_temp(self, temp_path: Path, max_size: int, head_check=None) -> StoredObject:
+        """Commits a file that was assembled elsewhere (multipart upload)."""
+        hasher = hashlib.sha256()
+        size = 0
+        with temp_path.open("rb") as handle:
+            head = handle.read(64)
+            if head_check is not None:
+                head_check(head)
+            handle.seek(0)
+            while chunk := handle.read(CHUNK):
+                size += len(chunk)
+                if size > max_size:
+                    raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                                        detail=f"File exceeds the {max_size} byte limit")
+                hasher.update(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="Empty file")
+        digest = hasher.hexdigest()
+        target = self._target(digest)
+        os.replace(temp_path, target)
+        return StoredObject(storage_key=digest, size=size, sha256=digest)
+
     def path_for(self, storage_key: str) -> Path: ...
     def open(self, storage_key: str) -> BinaryIO: ...
     async def delete(self, storage_key: str) -> None: ...
@@ -45,13 +67,20 @@ class LocalStorage:
         directory.mkdir(parents=True, exist_ok=True)
         return directory / digest
 
-    async def save(self, file: UploadFile, max_size: int) -> StoredObject:
+    async def save(self, file: UploadFile, max_size: int, head_check=None) -> StoredObject:
         hasher = hashlib.sha256()
         tmp = self.root / f".upload-{uuid.uuid4().hex}"
         size = 0
         try:
+            checked = False
             with tmp.open("wb") as handle:
                 while chunk := await file.read(CHUNK):
+                    if not checked:
+                        # Validate the first bytes before anything is committed, so a
+                        # rejected upload never lands in the content store.
+                        checked = True
+                        if head_check is not None:
+                            head_check(chunk[:64])
                     size += len(chunk)
                     if size > max_size:
                         raise HTTPException(
@@ -69,6 +98,28 @@ class LocalStorage:
         finally:
             if tmp.exists():
                 tmp.unlink()
+
+    async def save_temp(self, temp_path: Path, max_size: int, head_check=None) -> StoredObject:
+        """Commits a file that was assembled elsewhere (multipart upload)."""
+        hasher = hashlib.sha256()
+        size = 0
+        with temp_path.open("rb") as handle:
+            head = handle.read(64)
+            if head_check is not None:
+                head_check(head)
+            handle.seek(0)
+            while chunk := handle.read(CHUNK):
+                size += len(chunk)
+                if size > max_size:
+                    raise HTTPException(status_code=status.HTTP_413_CONTENT_TOO_LARGE,
+                                        detail=f"File exceeds the {max_size} byte limit")
+                hasher.update(chunk)
+        if size == 0:
+            raise HTTPException(status_code=400, detail="Empty file")
+        digest = hasher.hexdigest()
+        target = self._target(digest)
+        os.replace(temp_path, target)
+        return StoredObject(storage_key=digest, size=size, sha256=digest)
 
     def path_for(self, storage_key: str) -> Path:
         if "/" in storage_key or "\\" in storage_key or ".." in storage_key:
