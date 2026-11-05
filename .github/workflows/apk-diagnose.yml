@@ -20,6 +20,7 @@ on:
 permissions:
   actions: read
   contents: read
+  pull-requests: write
 
 jobs:
   diagnose:
@@ -95,20 +96,36 @@ jobs:
           echo "::notice title=ZipAlign::$(cat /tmp/e.txt)"
 
       # ---------- Android 10, x86_64: signature/manifest/parse proof ----------
+      - name: Which emulator images exist
+        run: |
+          SDKMANAGER="$SDKMANAGER"
+          "$SDKMANAGER" --list 2>/dev/null | grep -E "^  system-images;android-(29|30|31);" > avail.txt || true
+          echo "x86/arm64 for 29-31:" > /tmp/i.txt
+          grep -E "x86_64|arm64-v8a|armeabi-v7a" avail.txt | head -8 >> /tmp/i.txt
+          echo "::notice title=AvailableImages::$(tr '\n' ' ' < /tmp/i.txt | cut -c1-900)"
+          grep -E "armeabi-v7a" avail.txt | head -5 > armavail.txt || true
+          echo "::notice title=AvailableArmv7Images::$(tr '\n' ' ' < armavail.txt | cut -c1-900)"
+
       - name: Install on Android 10 (x86_64) and capture the exact error
         run: |
           set +e
           SDKMANAGER="$SDKMANAGER"
           AVDMANAGER="$(dirname "$SDKMANAGER")/avdmanager"
-          "$SDKMANAGER" "emulator" "system-images;android-29;default;x86_64" >/dev/null 2>&1
-          echo no | "$AVDMANAGER" create avd -n api29x -k "system-images;android-29;default;x86_64" --force >/dev/null 2>&1
+          "$SDKMANAGER" "emulator" "system-images;android-29;default;x86_64" > img-x86.log 2>&1
+          echo "sdkmanager_exit=$?"
+          tail -3 img-x86.log | tr '\n' ' ' > /tmp/i2.txt
+          echo no | "$AVDMANAGER" create avd -n api29x -k "system-images;android-29;default;x86_64" --force > avd-x86.log 2>&1
+          echo "avdmanager_exit=$?"
+          tail -2 avd-x86.log | tr '\n' ' ' >> /tmp/i2.txt
+          echo "::notice title=EmulatorSetup::$(cat /tmp/i2.txt | cut -c1-900)"
+          ls /dev/kvm && echo "kvm present" || echo "kvm MISSING"
           nohup "$ANDROID_HOME/emulator/emulator" -avd api29x -no-window -no-audio -no-boot-anim \
             -no-snapshot -gpu swiftshader_indirect -memory 2048 > emu-x86.log 2>&1 &
           adb wait-for-device
           for i in $(seq 1 60); do
             B=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
             [ "$B" = "1" ] && break
-            sleep 5
+            sleep 15
           done
           echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r') sdk=$(adb shell getprop ro.build.version.sdk | tr -d '\r') abi=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
           adb shell getprop ro.build.version.sdk | tr -d '\r' > /tmp/sdk.txt
@@ -162,6 +179,29 @@ jobs:
           echo "::notice title=InstallOnAndroid10_armeabi_v7a::$(head -4 install-arm.txt | tr '\n' ' ')"
           adb logcat -d 2>/dev/null | grep -iE "PackageManager|PackageInstaller|installd" | tail -6 | tr '\n' ' ' \
             | cut -c1-900 | sed 's/^/::warning title=ArmPackageManagerLog::/'
+
+      - name: Publish the diagnosis on the pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### APK install diagnosis (run $GITHUB_RUN_ID)"
+            echo
+            for f in badging.txt sig.txt manifest.txt libs.txt align.txt avail.txt armavail.txt install-x86.txt install-arm.txt emu-x86.log emu-arm.log img-x86.log avd-x86.log; do
+              [ -f "$f" ] || continue
+              echo "<details><summary>$f</summary>"
+              echo
+              echo '```'
+              tail -25 "$f"
+              echo '```'
+              echo "</details>"
+              echo
+            done
+          } > report.md
+          wc -c report.md
+          gh pr comment 1 --body-file report.md \
+            || gh api "repos/$GITHUB_REPOSITORY/issues/1/comments" -F body=@report.md
 
       - name: Upload diagnosis reports
         if: always()
