@@ -34,6 +34,22 @@ public final class PlatformMediaSync {
      *  arguments and would throw on our path key, so progress stays here until a
      *  view binds to it. */
     private static final Map<String, Float> PROGRESS = new ConcurrentHashMap<>();
+    /** Uploads that failed and can be retried from the same local file. */
+    private static final Map<String, FailedUpload> FAILED = new ConcurrentHashMap<>();
+    private static final long CACHE_LIMIT_BYTES = 200L * 1024 * 1024;
+
+    private static final class FailedUpload {
+        final long dialogId;
+        final String chatId, kind, caption, replyTo;
+
+        FailedUpload(long dialogId, String chatId, String kind, String caption, String replyTo) {
+            this.dialogId = dialogId;
+            this.chatId = chatId;
+            this.kind = kind;
+            this.caption = caption;
+            this.replyTo = replyTo;
+        }
+    }
 
     private PlatformMediaSync() {
     }
@@ -54,8 +70,14 @@ public final class PlatformMediaSync {
             return;
         }
         final String key = file.getAbsolutePath();
+        if (CANCELLED.containsKey(key)) {
+            // A double tap must not start a second upload of the same file.
+            FileLog.d("platform media: upload already running for " + key);
+            return;
+        }
         final AtomicBoolean cancel = new AtomicBoolean(false);
         CANCELLED.put(key, cancel);
+        FAILED.remove(key);
         PlatformBridge.get().media().upload(file, kind, guessMime(file), new MediaRepository.Progress() {
             @Override
             public void onProgress(long sent, long total) {
@@ -72,6 +94,7 @@ public final class PlatformMediaSync {
             public void onError(PlatformException error) {
                 CANCELLED.remove(key);
                 PROGRESS.remove(key);
+                FAILED.put(key, new FailedUpload(dialogId, chatId, kind, caption, replyToMessageId));
                 FileLog.e("platform media upload: " + error);
             }
         });
@@ -99,6 +122,47 @@ public final class PlatformMediaSync {
     public static float uploadProgress(String path) {
         Float value = PROGRESS.get(path);
         return value == null ? -1f : value;
+    }
+
+    /** True while this local file is being uploaded (guards double sends). */
+    public static boolean isUploading(String path) {
+        return CANCELLED.containsKey(path);
+    }
+
+    /** Retries the last failed upload of this path, if there is one. */
+    public static boolean retry(String path) {
+        FailedUpload failed = FAILED.remove(path);
+        if (failed == null) {
+            return false;
+        }
+        sendMedia(failed.dialogId, new File(path), failed.kind, failed.caption, failed.replyTo);
+        return true;
+    }
+
+    /** Drops the oldest cached downloads once the cache grows past its budget. */
+    public static void pruneCache() {
+        File dir = new File(ApplicationLoader.applicationContext.getCacheDir(), "platform_media");
+        File[] files = dir.listFiles();
+        if (files == null) {
+            return;
+        }
+        long total = 0;
+        for (File file : files) {
+            total += file.length();
+        }
+        if (total <= CACHE_LIMIT_BYTES) {
+            return;
+        }
+        java.util.Arrays.sort(files, (a, b) -> Long.compare(a.lastModified(), b.lastModified()));
+        for (File file : files) {
+            if (total <= CACHE_LIMIT_BYTES) {
+                break;
+            }
+            long length = file.length();
+            if (file.delete()) {
+                total -= length;
+            }
+        }
     }
 
     /** Cancels an upload that is in flight for this path. */
@@ -257,6 +321,7 @@ public final class PlatformMediaSync {
         if (!isEnabled()) {
             return;
         }
+        pruneCache();
         PlatformBridge.get().media().download(fileId, cacheFile(fileId), progress, null, callback);
     }
 

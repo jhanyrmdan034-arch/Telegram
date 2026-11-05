@@ -311,7 +311,11 @@ class ChatFolderChat(Base):
 class File(Base):
     __tablename__ = "files"
     __table_args__ = (CheckConstraint("kind IN ('photo','video','document','voice','sticker','avatar','other')",
-                                      name="ck_file_kind"),)
+                                      name="ck_file_kind"),
+                      # One record per (owner, bytes, kind): concurrent uploads of the
+                      # same file must converge instead of racing into duplicates.
+                      UniqueConstraint("owner_id", "sha256", "kind",
+                                       name="uq_file_owner_digest_kind"),)
 
     id: Mapped[uuid.UUID] = _pk()
     owner_id: Mapped[uuid.UUID | None] = mapped_column(

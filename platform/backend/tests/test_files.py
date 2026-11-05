@@ -112,3 +112,27 @@ async def test_delete_file_removes_object(client, alice, storage_dir):
     assert (await client.get(f"/api/v1/files/{upload['id']}",
                              headers=auth(alice["access_token"]))).status_code == 404
     assert storage_dir.exists()
+
+
+async def test_concurrent_inserts_of_the_same_file_converge(client, alice):
+    """Two identical uploads racing must end up as one record (unique constraint)."""
+    import asyncio
+    import uuid as _uuid
+
+    from app.models import File
+    from app.routers.files import _insert_or_reuse
+
+    runtime = client._transport.app.state.runtime
+    owner_id = _uuid.UUID(alice["user"]["id"]) if "user" in alice else _uuid.UUID(
+        (await client.get("/api/v1/users/me", headers=auth(alice["access_token"]))).json()["id"])
+    digest = "c" * 64
+
+    async def insert():
+        async with runtime.session_factory() as session:
+            record = File(owner_id=owner_id, storage_key=digest, name="race.bin",
+                          mime_type="application/octet-stream", size=4, sha256=digest,
+                          kind="other")
+            return await _insert_or_reuse(session, runtime, record, owner_id, "other")
+
+    first, second = await asyncio.gather(insert(), insert())
+    assert first.id == second.id

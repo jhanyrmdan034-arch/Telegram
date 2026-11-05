@@ -6,10 +6,11 @@ import uuid
 from pathlib import Path
 from typing import Literal
 
-from fastapi import (APIRouter, File as FormFile, Form, HTTPException, Request,
+from fastapi import (APIRouter, File as FormFile, Form, Header, HTTPException, Request,
                      Response, UploadFile, status)
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from ..deps import CurrentUser, DbDep, RuntimeDep
 from datetime import UTC, datetime
@@ -98,9 +99,7 @@ async def upload_file(
         height=height,
         is_public=is_public,
     )
-    db.add(record)
-    await db.commit()
-    await db.refresh(record)
+    record = await _insert_or_reuse(db, runtime, record, user.id, kind)
     await emit(runtime, [user.id], "media.uploaded", {
         "file_id": str(record.id), "kind": record.kind, "mime_type": record.mime_type,
         "size": record.size, "sha256": record.sha256, "name": record.name,
@@ -191,6 +190,43 @@ async def _denied(db, runtime, user_id: uuid.UUID, record: File, event_type: str
         pass
 
 
+async def _insert_or_reuse(db, runtime, record: File, owner_id: uuid.UUID,
+                           kind: str) -> File:
+    """Inserts the record; a concurrent identical upload resolves to one row.
+
+    The digest and kind are captured before the commit: after a rollback the ORM
+    instance is expired and reading a column would need IO on a dead greenlet.
+    """
+    digest = record.sha256
+    db.add(record)
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        existing = (await db.execute(
+            select(File).where(File.owner_id == owner_id, File.sha256 == digest,
+                               File.kind == kind)
+        )).scalars().first()
+        if existing is None:  # pragma: no cover - constraint we did not expect
+            raise
+        return existing
+    await db.refresh(record)
+    return record
+
+
+async def _release_storage(db, runtime, record: File) -> None:
+    """Drops the stored object only when no other file record shares the digest.
+
+    Two accounts uploading identical bytes own separate records but a single
+    content-addressed object, so deleting one must never break the other.
+    """
+    others = (await db.execute(
+        select(File.id).where(File.storage_key == record.storage_key, File.id != record.id).limit(1)
+    )).scalar_one_or_none()
+    if others is None:
+        await runtime.storage.delete(record.storage_key)
+
+
 async def _users_of_file_chats(db, file_id: uuid.UUID) -> list[uuid.UUID]:
     rows = (await db.execute(
         select(ChatMember.user_id)
@@ -210,7 +246,7 @@ async def delete_file(file_id: uuid.UUID, user: CurrentUser, db: DbDep, runtime:
     if record.owner_id != user.id:
         raise HTTPException(status_code=403, detail="Only the owner can delete this file")
     audience = await _users_of_file_chats(db, record.id)
-    await runtime.storage.delete(record.storage_key)
+    await _release_storage(db, runtime, record)
     await db.delete(record)
     await db.commit()
     if audience:
@@ -342,9 +378,7 @@ async def multipart_complete(upload_id: str, user: CurrentUser, db: DbDep, runti
                   mime_type=sniffed.get("mime", "application/octet-stream"), size=stored.size,
                   sha256=stored.sha256, kind=meta["kind"], width=width, height=height,
                   is_public=False)
-    db.add(record)
-    await db.commit()
-    await db.refresh(record)
+    record = await _insert_or_reuse(db, runtime, record, user.id, meta["kind"])
     _cleanup_multipart(directory)
     await emit(runtime, [user.id], "media.uploaded", {
         "file_id": str(record.id), "kind": record.kind, "mime_type": record.mime_type,
@@ -375,8 +409,17 @@ async def download_token(file_id: uuid.UUID, user: CurrentUser, db: DbDep, runti
 
 
 @router.get("/{file_id}/stream")
-async def stream_file(file_id: uuid.UUID, token: str, db: DbDep, runtime: RuntimeDep):
-    """Token-only download: the token itself carries and bounds the authorisation."""
+async def stream_file(file_id: uuid.UUID, db: DbDep, runtime: RuntimeDep,
+                       token: str | None = None, x_download_token: str | None = Header(default=None)):
+    """Token-only download.
+
+    The token carries and bounds the authorisation. It can be sent as a header so
+    that it never appears in a URL, a proxy log or a browser history entry; the
+    query parameter stays supported for players that cannot set headers.
+    """
+    token = x_download_token or token
+    if not token:
+        raise HTTPException(status_code=403, detail="Missing download token")
     user_id = verify_download_token(runtime.settings, token, file_id)
     if user_id is None:
         raise HTTPException(status_code=403, detail="Invalid or expired token")

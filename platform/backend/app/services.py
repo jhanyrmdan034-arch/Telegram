@@ -322,3 +322,15 @@ async def attach_file_payloads(db, payloads: list[dict]) -> None:
             "size": record.size, "kind": record.kind,
             "width": record.width, "height": record.height,
         }
+
+
+def is_orphan_file(record, live_file_ids: set, cutoff) -> bool:
+    """True when no live message references the file and it is old enough."""
+    if getattr(record, "is_public", False):
+        return False
+    if record.id in live_file_ids:
+        return False
+    created = getattr(record, "created_at", None)
+    if created is not None and created > cutoff:
+        return False
+    return True

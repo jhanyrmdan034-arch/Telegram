@@ -2477,7 +2477,7 @@
           "files"
         ],
         "summary": "Stream File",
-        "description": "Token-only download: the token itself carries and bounds the authorisation.",
+        "description": "Token-only download.\n\nThe token carries and bounds the authorisation. It can be sent as a header so\nthat it never appears in a URL, a proxy log or a browser history entry; the\nquery parameter stays supported for players that cannot set headers.",
         "operationId": "stream_file_api_v1_files__file_id__stream_get",
         "parameters": [
           {
@@ -2493,10 +2493,33 @@
           {
             "name": "token",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Token"
+            }
+          },
+          {
+            "name": "x-download-token",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "X-Download-Token"
             }
           }
         ],

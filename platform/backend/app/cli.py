@@ -93,15 +93,23 @@ async def _files_gc(older_than_hours: int) -> None:
     cutoff = datetime.now(UTC) - timedelta(hours=older_than_hours)
     removed = 0
     async with factory() as db:
-        used = set((await db.execute(
-            select(Message.file_id).where(Message.file_id.is_not(None))
+        # A file kept alive only by deleted messages is an orphan too.
+        live = set((await db.execute(
+            select(Message.file_id).where(Message.file_id.is_not(None),
+                                          Message.deleted_at.is_(None))
         )).scalars().all())
-        for record in (await db.execute(select(File))).scalars().all():
-            if record.id in used or record.is_public:
+        from .services import is_orphan_file
+
+        records = (await db.execute(select(File))).scalars().all()
+        shared = {}
+        for record in records:
+            shared[record.storage_key] = shared.get(record.storage_key, 0) + 1
+        for record in records:
+            if not is_orphan_file(record, live, cutoff):
                 continue
-            if record.created_at and record.created_at > cutoff:
-                continue
-            await storage.delete(record.storage_key)
+            shared[record.storage_key] -= 1
+            if shared[record.storage_key] <= 0:
+                await storage.delete(record.storage_key)
             await db.delete(record)
             removed += 1
         await db.commit()

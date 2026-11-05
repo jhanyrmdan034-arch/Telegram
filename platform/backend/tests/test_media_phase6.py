@@ -403,3 +403,68 @@ def test_message_carries_file_metadata_for_the_bubble(sync_client: TestClient):
     assert file_meta["size"] == len(one_pixel)
     assert file_meta["mime_type"] == "image/png"
     assert file_meta["width"] == 1 and file_meta["height"] == 1
+
+
+# --------------------------------------------------------------------------- #
+# Phase 6.1 — security re-review
+# --------------------------------------------------------------------------- #
+
+def test_identical_bytes_from_two_accounts_stay_independent(sync_client: TestClient):
+    alice, bob = _register(sync_client), _register(sync_client)
+    first = _upload(sync_client, alice, JPEG).json()
+    second = _upload(sync_client, bob, JPEG).json()
+    # Separate records (different owners) but one content-addressed object.
+    assert first["id"] != second["id"]
+    assert first["sha256"] == second["sha256"]
+
+    # Deleting Alice's copy must not destroy Bob's file.
+    assert sync_client.delete(f"/api/v1/files/{first['id']}", headers=_h(alice)).status_code == 204
+    kept = sync_client.get(f"/api/v1/files/{second['id']}/content", headers=_h(bob))
+    assert kept.status_code == 200 and kept.content == JPEG
+
+
+def test_download_token_can_travel_in_a_header(sync_client: TestClient):
+    alice = _register(sync_client)
+    file_id = _upload(sync_client, alice, JPEG).json()["id"]
+    token = sync_client.post(f"/api/v1/files/{file_id}/download-token",
+                             headers=_h(alice)).json()["token"]
+    # No token in the URL at all: nothing sensitive reaches an access log.
+    response = sync_client.get(f"/api/v1/files/{file_id}/stream",
+                               headers={"X-Download-Token": token})
+    assert response.status_code == 200 and response.content == JPEG
+    assert sync_client.get(f"/api/v1/files/{file_id}/stream").status_code == 403
+
+
+def test_gc_keeps_live_files_and_collects_orphans():
+    from datetime import UTC, datetime, timedelta
+    from types import SimpleNamespace
+
+    from app.services import is_orphan_file
+
+    now = datetime.now(UTC)
+    cutoff = now - timedelta(hours=24)
+    old = now - timedelta(hours=48)
+    live_id, orphan_id, young_id, public_id = (uuid.uuid4() for _ in range(4))
+
+    live = SimpleNamespace(id=live_id, is_public=False, created_at=old)
+    orphan = SimpleNamespace(id=orphan_id, is_public=False, created_at=old)
+    young = SimpleNamespace(id=young_id, is_public=False, created_at=now)
+    public = SimpleNamespace(id=public_id, is_public=True, created_at=old)
+
+    referenced = {live_id}
+    assert is_orphan_file(live, referenced, cutoff) is False
+    assert is_orphan_file(orphan, referenced, cutoff) is True
+    assert is_orphan_file(young, referenced, cutoff) is False
+    assert is_orphan_file(public, referenced, cutoff) is False
+
+
+def test_access_is_revoked_after_message_deletion_and_file_deletion(sync_client: TestClient):
+    alice, bob = _register(sync_client), _register(sync_client)
+    chat = _chat(sync_client, alice, bob)
+    file_id = _upload(sync_client, alice, JPEG + b"-revoke").json()["id"]
+    message = sync_client.post(f"/api/v1/chats/{chat['id']}/messages", headers=_h(alice),
+                               json={"type": "photo", "file_id": file_id}).json()
+    sync_client.delete(f"/api/v1/messages/{message['id']}", headers=_h(alice))
+    assert sync_client.get(f"/api/v1/files/{file_id}/content", headers=_h(bob)).status_code == 403
+    assert sync_client.delete(f"/api/v1/files/{file_id}", headers=_h(alice)).status_code == 204
+    assert sync_client.get(f"/api/v1/files/{file_id}/content", headers=_h(alice)).status_code == 404

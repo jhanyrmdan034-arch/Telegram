@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from contextlib import asynccontextmanager
 from typing import Any
@@ -37,6 +38,30 @@ MAINTENANCE_EXEMPT_PREFIXES = (
 )
 
 
+class _RedactTokens(logging.Filter):
+    """Keeps download tokens out of the access log.
+
+    Tokens are scoped and short-lived, but a log line is still a leak: it survives
+    rotation and is readable by anyone with log access.
+    """
+
+    TOKEN = re.compile(r"(token=)[^&\s\"]+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.args, tuple):
+            record.args = tuple(
+                self.TOKEN.sub(r"\1***", item) if isinstance(item, str) else item
+                for item in record.args
+            )
+        return True
+
+
+def _install_log_redaction() -> None:
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, _RedactTokens) for item in access.filters):
+        access.addFilter(_RedactTokens())
+
+
 def create_app(settings: Settings | None = None, engine=None) -> FastAPI:
     settings = settings or get_settings()
 
@@ -65,6 +90,8 @@ def create_app(settings: Settings | None = None, engine=None) -> FastAPI:
             yield
         finally:
             await runtime.stop()
+
+    _install_log_redaction()
 
     app = FastAPI(
         title="Messaging Platform API",
