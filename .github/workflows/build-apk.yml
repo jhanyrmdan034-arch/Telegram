@@ -63,6 +63,21 @@ jobs:
           ./gradlew --no-daemon --stacktrace :TMessagesProj:compileDebugJavaWithJavac 2>&1 | tee compile.log \
             || ./gradlew --no-daemon --stacktrace :TMessagesProj:compileAfatDebugJavaWithJavac 2>&1 | tee -a compile.log
 
+      # Job logs are not reachable from the development sandbox, but check-run
+      # annotations are, so the compiler's own words travel through this step.
+      - name: Report Java errors as annotations
+        if: failure()
+        run: |
+          if [ -f compile.log ]; then
+            grep -E "error:" compile.log | head -25 | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+            done
+            echo "### Compiler errors (first 25)" >> "$GITHUB_STEP_SUMMARY"
+            grep -E "error:" compile.log | head -25 >> "$GITHUB_STEP_SUMMARY" || true
+          else
+            echo "::error::compile.log was not produced"
+          fi
+
       - name: Upload compile log
         if: always()
         uses: actions/upload-artifact@v4
