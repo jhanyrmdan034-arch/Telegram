@@ -69,11 +69,22 @@ jobs:
         if: failure()
         run: |
           if [ -f compile.log ]; then
-            grep -E "error:" compile.log | head -25 | while IFS= read -r line; do
-              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
-            done
-            echo "### Compiler errors (first 25)" >> "$GITHUB_STEP_SUMMARY"
-            grep -E "error:" compile.log | head -25 >> "$GITHUB_STEP_SUMMARY" || true
+            COUNT=$(grep -cE "error:" compile.log || true)
+            echo "lines with 'error:' = $COUNT"
+            if [ "$COUNT" -gt 0 ]; then
+              grep -E "error:" compile.log | head -25 | while IFS= read -r line; do
+                echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+              done
+            else
+              # No javac errors: the failure happened earlier, so show what Gradle said.
+              grep -nE "FAILURE|What went wrong|Could not|Execution failed|Unsupported|requires|not found|No such file" compile.log \
+                | head -12 | while IFS= read -r line; do
+                echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+              done
+              tail -c 3000 compile.log | tr -d '\r' | tail -20 | while IFS= read -r line; do
+                echo "::warning::$(printf '%s' "$line" | cut -c1-900)"
+              done
+            fi
           else
             echo "::error::compile.log was not produced"
           fi
