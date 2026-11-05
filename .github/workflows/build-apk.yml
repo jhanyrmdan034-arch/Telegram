@@ -463,18 +463,46 @@ jobs:
       - name: Start the proprietary backend
         working-directory: platform/backend
         run: |
+          set -o pipefail
+          BACKEND_LOG="$RUNNER_TEMP/backend.log"
+          exec > >(tee "$RUNNER_TEMP/backend-step.log") 2>&1
+          echo "== python =="; python3 --version
           python3 -m venv .venv-ci
           . .venv-ci/bin/activate
+          echo "== pip install =="
           pip install --quiet -r requirements.txt
-          mkdir -p "$STORAGE_DIR"
+          echo "== migrations =="
           alembic upgrade head
-          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > "$RUNNER_TEMP/backend.log" 2>&1 &
+          mkdir -p "$STORAGE_DIR"
+          echo "== uvicorn =="
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > "$BACKEND_LOG" 2>&1 &
           echo $! > "$RUNNER_TEMP/backend.pid"
-          for i in $(seq 1 60); do
-            if curl -sf http://127.0.0.1:8000/api/v1/config > /dev/null; then echo "backend up"; exit 0; fi
+          for i in $(seq 1 45); do
+            if curl -sf http://127.0.0.1:8000/api/v1/healthz > /dev/null \
+               || curl -sf http://127.0.0.1:8000/api/v1/config > /dev/null; then
+              echo "backend up after ${i} tries"
+              exit 0
+            fi
             sleep 2
           done
-          cat "$RUNNER_TEMP/backend.log"; exit 1
+          echo "== backend never answered; log follows =="
+          cat "$BACKEND_LOG" || true
+          exit 1
+
+      - name: Report backend startup errors
+        if: failure()
+        run: |
+          for f in "$RUNNER_TEMP/backend-step.log" "$RUNNER_TEMP/backend.log"; do
+            [ -f "$f" ] || continue
+            echo "--- $f ---"
+            grep -nE "Error|error:|Traceback|FAILED|Exception|ModuleNotFound|Connection refused" "$f" \
+              | tail -12 | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+            done
+            tail -5 "$f" | tr -d '\r' | while IFS= read -r line; do
+              echo "::warning::$(printf '%s' "$line" | cut -c1-900)"
+            done
+          done
 
       - name: Install and drive the app on the emulator
         uses: reactivecircus/android-emulator-runner@v2
