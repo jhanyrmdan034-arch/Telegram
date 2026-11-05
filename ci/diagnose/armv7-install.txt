@@ -1,1 +1,1 @@
-trigger: run 5 — macOS ARM emulator with a 30 minute boot budget (api 30 and 34)
+trigger: run 6 — macOS Intel Android 10 install verdict

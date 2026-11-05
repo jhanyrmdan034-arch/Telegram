@@ -309,3 +309,67 @@ jobs:
           cat report-arm.md
           gh pr comment 1 --body-file report-arm.md \
             || gh api "repos/$GITHUB_REPOSITORY/issues/1/comments" -F body=@report-arm.md
+
+  # macOS Intel runners have working hardware acceleration (HVF), unlike the
+  # Linux runners where /dev/kvm is denied. An x86_64 Android 10 emulator cannot
+  # RUN arm libraries, but it does verify signature, manifest and archive first:
+  # a parse/signature defect would surface here as INSTALL_PARSE_FAILED_*, and a
+  # healthy APK must surface as INSTALL_FAILED_NO_MATCHING_ABIS.
+  diagnose-x86-macos:
+    name: PackageManager verdict (Android 10 x86_64, macOS/HVF)
+    runs-on: macos-13
+    timeout-minutes: 60
+    steps:
+      - name: Download the APK from its build run
+        uses: actions/download-artifact@v4
+        with:
+          name: Telegram-apk-armv7
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: apk
+
+      - name: Install the APK on Android 10 (x86_64)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          emulator-boot-timeout: 1200
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot
+          script: |
+            set +e
+            {
+              echo "device_abilist=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
+              echo "device_sdk=$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+            } | tee device.txt
+            APK=$(ls apk/*.apk | head -1)
+            adb logcat -c
+            adb install -r -d "$APK" > install.txt 2>&1
+            echo "adb_install_exit=$?" >> install.txt
+            cat install.txt
+            adb logcat -d | grep -iE "PackageManager|PackageInstaller|installd" | tail -40 > logcat.txt
+            tail -12 logcat.txt
+
+      - name: Publish the result on the pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### PackageManager verdict — Android 10 x86_64 (macOS/HVF), run $GITHUB_RUN_ID"
+            echo
+            for f in device.txt install.txt logcat.txt; do
+              [ -f "$f" ] || continue
+              echo "<details><summary>$f</summary>"
+              echo
+              echo '```'
+              tail -20 "$f"
+              echo '```'
+              echo "</details>"
+              echo
+            done
+          } > report-x86mac.md
+          gh pr comment 1 --body-file report-x86mac.md \
+            || gh api "repos/$GITHUB_REPOSITORY/issues/1/comments" -F body=@report-x86mac.md
