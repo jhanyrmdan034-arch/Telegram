@@ -232,7 +232,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        api-level: [29, 30]
+        include:
+          - api-level: 30
+            target: google_apis
+          - api-level: 34
+            target: default
     steps:
       - name: Download the APK from its build run
         uses: actions/download-artifact@v4
@@ -253,9 +257,10 @@ jobs:
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: ${{ matrix.api-level }}
-          target: google_apis
+          target: ${{ matrix.target }}
           arch: arm64-v8a
           profile: pixel_2
+          emulator-boot-timeout: 1800
           disable-animations: true
           emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -camera-back none -camera-front none
           script: |
@@ -288,7 +293,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           {
-            echo "### Real install attempt — API ${{ matrix.api-level }}, arm64-v8a (macOS/HVF), run $GITHUB_RUN_ID"
+            echo "### Real install attempt — API ${{ matrix.api-level }} (${{ matrix.target }}), arm64-v8a (macOS/HVF), run $GITHUB_RUN_ID"
             echo
             for f in facts.txt device.txt install.txt installed.txt launch.txt logcat.txt; do
               [ -f "$f" ] || continue
