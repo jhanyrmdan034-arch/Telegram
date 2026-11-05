@@ -1,0 +1,179 @@
+name: Diagnose APK (install on Android 10)
+
+# Downloads an already-built armv7 APK (no native rebuild), proves what is
+# inside it, and then performs a real `adb install` on two Android 10 (API 29)
+# emulators: x86_64 (proves signature/manifest are valid) and armeabi-v7a
+# (the same ABI as the target phone). Every finding is emitted as an
+# annotation so it can be read without access to the raw job logs.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run id that owns the Telegram-apk-armv7 artifact"
+        default: "42013089142"
+  push:
+    branches: ["arena/76249c66-telegram"]
+    paths:
+      - "ci/diagnose/**"
+      - ".github/workflows/apk-diagnose.yml"
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      ARTIFACT_RUN_ID: ${{ github.event.inputs.run_id || '42013089142' }}
+    steps:
+      - name: Free disk space + add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/az 2>/dev/null || true
+          sudo fallocate -l 8G /swapfile || true
+          sudo chmod 600 /swapfile || true
+          sudo mkswap /swapfile || true
+          sudo swapon /swapfile || true
+          df -h | tail -2
+
+      - name: Download the armv7 APK from its build run
+        uses: actions/download-artifact@v4
+        with:
+          name: Telegram-apk-armv7
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: apk
+
+      - name: Show what was downloaded
+        run: ls -l apk
+
+      - name: Install Android tooling
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || SDKMANAGER="$(command -v sdkmanager)"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "build-tools;36.0.0" "platforms;android-29" >/dev/null
+
+      # ---------- static inspection (fast, always runs) ----------
+      - name: Static inspection of the APK
+        run: |
+          set +e
+          APK=$(ls apk/*.apk | head -1)
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          echo "### badging"
+          "$BT/aapt2" dump badging "$APK" > badging.txt 2>&1
+          grep -E "^package:|sdkVersion|targetSdkVersion|native-code|application-label:" badging.txt | head -6
+          grep -E "^package:|sdkVersion|targetSdkVersion|native-code" badging.txt | head -6 | tr '\n' ' ' > /tmp/a.txt
+          echo "::notice title=Badging::$(cat /tmp/a.txt)"
+
+          echo "### signature"
+          "$BT/apksigner" verify --verbose --print-certs "$APK" > sig.txt 2>&1
+          echo "exit=$?" >> sig.txt
+          grep -E "Verifies|Verified using|Signer #1 certificate DN|key size|ERROR|DOES NOT VERIFY" sig.txt | head -8
+          grep -E "Verifies|Verified using|ERROR|DOES NOT" sig.txt | head -6 | tr '\n' ' ' > /tmp/b.txt
+          echo "::notice title=Signature::$(cat /tmp/b.txt)"
+
+          echo "### manifest flags"
+          "$BT/aapt2" dump xmltree "$APK" --file AndroidManifest.xml > manifest.txt 2>&1
+          grep -E "extractNativeLibs|testOnly|debuggable|minSdkVersion|targetSdkVersion|versionCode" manifest.txt \
+            | sed 's/^ *//' | head -10 | tr '\n' ' ' > /tmp/c.txt
+          echo "::notice title=Manifest::$(cat /tmp/c.txt)"
+
+          echo "### native libraries"
+          unzip -v "$APK" | awk '$8 ~ /^lib\// {print $2, $7, $8}' | head -40 > libs.txt
+          cat libs.txt
+          echo "libs=$(wc -l < libs.txt) stored_or_deflated=$(awk '{print $2}' libs.txt | sort -u | tr '\n' ',')" > /tmp/d.txt
+          echo "::notice title=NativeLibs::$(cat /tmp/d.txt)"
+
+          echo "### zip alignment"
+          "$BT/zipalign" -c -P 16 -v 4 "$APK" > align.txt 2>&1
+          echo "zipalign_exit=$?" >> align.txt
+          tail -3 align.txt | tr '\n' ' ' > /tmp/e.txt
+          echo "::notice title=ZipAlign::$(cat /tmp/e.txt)"
+
+      # ---------- Android 10, x86_64: signature/manifest/parse proof ----------
+      - name: Install on Android 10 (x86_64) and capture the exact error
+        run: |
+          set +e
+          SDKMANAGER="$SDKMANAGER"
+          AVDMANAGER="$(dirname "$SDKMANAGER")/avdmanager"
+          "$SDKMANAGER" "emulator" "system-images;android-29;default;x86_64" >/dev/null 2>&1
+          echo no | "$AVDMANAGER" create avd -n api29x -k "system-images;android-29;default;x86_64" --force >/dev/null 2>&1
+          nohup "$ANDROID_HOME/emulator/emulator" -avd api29x -no-window -no-audio -no-boot-anim \
+            -no-snapshot -gpu swiftshader_indirect -memory 2048 > emu-x86.log 2>&1 &
+          adb wait-for-device
+          for i in $(seq 1 60); do
+            B=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            [ "$B" = "1" ] && break
+            sleep 5
+          done
+          echo "boot_completed=$(adb shell getprop sys.boot_completed | tr -d '\r') sdk=$(adb shell getprop ro.build.version.sdk | tr -d '\r') abi=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
+          adb shell getprop ro.build.version.sdk | tr -d '\r' > /tmp/sdk.txt
+          echo "device sdk=$(cat /tmp/sdk.txt) abi=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')" > /tmp/f.txt
+          adb install -r -d "$APK" > install-x86.txt 2>&1
+          echo "adb_install_exit=$?" >> install-x86.txt
+          cat install-x86.txt
+          tail -3 install-x86.txt | tr '\n' ' ' >> /tmp/f.txt
+          echo "::notice title=InstallOnAndroid10_x86_64::$(cat /tmp/f.txt)"
+          adb logcat -d 2>/dev/null | grep -iE "PackageManager|PackageInstaller|installd" | tail -6 | tr '\n' ' ' > /tmp/g.txt
+          echo "::warning title=PackageManagerLog::$(cat /tmp/g.txt)"
+
+      # ---------- Android 10, armeabi-v7a: the real target architecture ----------
+      - name: Install on Android 10 (armeabi-v7a) and capture the exact error
+        if: always()
+        run: |
+          set +e
+          SDKMANAGER="$SDKMANAGER"
+          AVDMANAGER="$(dirname "$SDKMANAGER")/avdmanager"
+          adb kill-server; sleep 2
+          IMG="system-images;android-29;default;armeabi-v7a"
+          if ! "$SDKMANAGER" "$IMG" > arm-img.log 2>&1; then
+            echo "::warning title=ArmImage::API 29 armeabi-v7a image unavailable, trying the newest armv7 image"
+            AVAIL=$("$SDKMANAGER" --list 2>/dev/null | grep -oE "system-images;android-[0-9]+;[a-z_]+;armeabi-v7a" | sort -u | tail -3)
+            echo "available armv7 images: $(echo "$AVAIL" | tr '\n' ' ')" > /tmp/h.txt
+            IMG=$(echo "$AVAIL" | tail -1)
+            [ -z "$IMG" ] && { echo "::error title=ArmImage::no armeabi-v7a system image available"; exit 0; }
+            "$SDKMANAGER" "$IMG" > arm-img.log 2>&1 || { echo "::error title=ArmImage::download failed for $IMG"; exit 0; }
+          fi
+          echo "using image: $IMG"
+          echo no | "$AVDMANAGER" create avd -n armv7 -k "$IMG" --force >/dev/null 2>&1
+          nohup "$ANDROID_HOME/emulator/emulator" -avd armv7 -no-window -no-audio -no-boot-anim \
+            -no-snapshot -gpu swiftshader_indirect -memory 2048 -accel off > emu-arm.log 2>&1 &
+          adb wait-for-device
+          BOOTED=0
+          for i in $(seq 1 90); do
+            B=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$B" = "1" ]; then BOOTED=1; break; fi
+            sleep 20
+          done
+          if [ "$BOOTED" != "1" ]; then
+            LOGLINE=$(tail -5 emu-arm.log | tr '\n' ' ' | cut -c1-900)
+            echo "::error title=ArmEmulator::armeabi-v7a emulator did not boot within 30 min"
+            echo "::warning title=ArmEmulatorLog::${LOGLINE}"
+            exit 0
+          fi
+          echo "arm device sdk=$(adb shell getprop ro.build.version.sdk | tr -d '\r') abi=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
+          adb install -r -d "$APK" > install-arm.txt 2>&1
+          echo "adb_install_exit=$?" >> install-arm.txt
+          cat install-arm.txt
+          echo "::notice title=InstallOnAndroid10_armeabi_v7a::$(head -4 install-arm.txt | tr '\n' ' ')"
+          adb logcat -d 2>/dev/null | grep -iE "PackageManager|PackageInstaller|installd" | tail -6 | tr '\n' ' ' \
+            | cut -c1-900 | sed 's/^/::warning title=ArmPackageManagerLog::/'
+
+      - name: Upload diagnosis reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-diagnosis
+          path: |
+            badging.txt
+            sig.txt
+            manifest.txt
+            libs.txt
+            align.txt
+            install-*.txt
+            emu-*.log
+          if-no-files-found: warn

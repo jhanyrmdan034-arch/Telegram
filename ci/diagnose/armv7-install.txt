@@ -1,0 +1,1 @@
+trigger: inspect the armv7 APK from run 42013089142 and try a real install on Android 10
