@@ -287,7 +287,26 @@ jobs:
         run: |
           sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a", "x86_64"/' TMessagesProj_App/build.gradle
           sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=org.telegram.messenger.fork/" gradle.properties
-          grep -n 'abiFilters\|^APP_PACKAGE' TMessagesProj_App/build.gradle gradle.properties
+          # The debug build appends ".beta" to the package, which no google-services
+          # client matches and which would not be the package adb launches below.
+          sed -i 's/applicationIdSuffix ".beta"//' TMessagesProj_App/build.gradle
+          NEW_PKG="org.telegram.messenger.fork" python3 - <<'PYEOF'
+          import json, os, glob
+          new_pkg = os.environ['NEW_PKG']
+          for path in sorted(glob.glob('*/google-services.json')):
+              with open(path) as handle:
+                  data = json.load(handle)
+              names = [c['client_info']['android_client_info']['package_name'] for c in data['client']]
+              if new_pkg not in names:
+                  client = json.loads(json.dumps(data['client'][0]))
+                  client['client_info']['android_client_info']['package_name'] = new_pkg
+                  data['client'].append(client)
+                  with open(path, 'w') as handle:
+                      json.dump(data, handle, indent=2)
+                      handle.write('\n')
+              print(path, '->', [c['client_info']['android_client_info']['package_name'] for c in data['client']])
+          PYEOF
+          grep -n 'abiFilters\|applicationIdSuffix\|^APP_PACKAGE' TMessagesProj_App/build.gradle gradle.properties
 
       - name: Build debug APK
         run: |
