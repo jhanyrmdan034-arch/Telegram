@@ -118,6 +118,52 @@ public final class PlatformMediaSync {
         }
     }
 
+    static void noteProgress(String path, long sent, long total) {
+        if (path == null) {
+            return;
+        }
+        PROGRESS.put(path, total <= 0 ? 0f : Math.min(1f, sent / (float) total));
+    }
+
+    /** Builds the media of a local (not yet uploaded) photo or document. */
+    public static void attachLocalMedia(TLRPC.TL_message message, String path, String kind) {
+        if (message == null || path == null) {
+            return;
+        }
+        File file = new File(path);
+        message.attachPath = path;
+        if ("photo".equals(kind)) {
+            TLRPC.TL_messageMediaPhoto media = new TLRPC.TL_messageMediaPhoto();
+            TLRPC.TL_photo photo = new TLRPC.TL_photo();
+            photo.sizes = new ArrayList<>();
+            android.graphics.BitmapFactory.Options options = new android.graphics.BitmapFactory.Options();
+            options.inJustDecodeBounds = true;
+            android.graphics.BitmapFactory.decodeFile(path, options);
+            TLRPC.TL_photoSize photoSize = new TLRPC.TL_photoSize();
+            photoSize.type = "m";
+            photoSize.w = options.outWidth;
+            photoSize.h = options.outHeight;
+            photoSize.size = (int) Math.min(file.length(), Integer.MAX_VALUE);
+            photoSize.location = new TLRPC.TL_fileLocationToBeDeprecated();
+            photo.sizes.add(photoSize);
+            media.photo = photo;
+            message.media = media;
+        } else {
+            TLRPC.TL_messageMediaDocument media = new TLRPC.TL_messageMediaDocument();
+            TLRPC.TL_document document = new TLRPC.TL_document();
+            document.mime_type = guessMime(file);
+            document.size = file.length();
+            document.file_name = file.getName();
+            document.attributes = new ArrayList<>();
+            TLRPC.TL_documentAttributeFilename filename = new TLRPC.TL_documentAttributeFilename();
+            filename.file_name = file.getName();
+            document.attributes.add(filename);
+            media.document = document;
+            message.media = media;
+        }
+        message.flags |= TLRPC.MESSAGE_FLAG_HAS_MEDIA;
+    }
+
     /** 0..1 upload progress for a local path, or -1 when nothing is in flight. */
     public static float uploadProgress(String path) {
         Float value = PROGRESS.get(path);

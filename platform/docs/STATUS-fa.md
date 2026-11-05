@@ -148,3 +148,12 @@ docker compose up -d --build
   دلیل: نیازمند معماری «اول پیام محلی، بعد آپلود» در `SendMessagesHelper` است.
 - **کامپایل/APK/Emulator انجام نشد**: نبود JDK/Android SDK و بسته‌بودن شبکهٔ مخازن، و CI برای این
   برنچ اجرا نمی‌شود (خطای محیط، نه کد).
+
+### فاز ۶.۲ (Local-First + Build)
+
+- معماری ارسال Local-First نوشته شد: پیام محلی با `MESSAGE_SEND_STATE_SENDING`، اتصال
+  `cancelSendingMessage` و `retrySendMessage` موجود، تأیید/خطا روی همان پیام، جلوگیری از پیام تکراری.
+- `BuildVars.LOCAL_FIRST_MEDIA = false` تا زمان تأیید Build واقعی.
+- **کامپایل/APK انجام نشد**: نبود JDK/SDK در سندباکس و ۴۰۳ برای `workflow_dispatch`
+  (پرمیشن `Actions: write`). PR #1 باز است و trigger `pull_request` اضافه شد ولی هیچ run‌ای
+  ساخته نشد. اقدام لازم از مالک مخزن در `docs/android/phase6.2-local-first-fa.md` §۳ آمده است.

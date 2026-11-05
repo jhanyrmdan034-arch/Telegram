@@ -44,6 +44,10 @@ public class BuildVars {
     /** Contacts, profiles and global search served by our backend. */
     public static final boolean CONTACTS_FROM_PLATFORM = BuildConfig.DEBUG;
 
+    /** Local-first media sending (bubble first, upload afterwards).
+     *  Off until the APK build validates the flow: it touches the send pipeline. */
+    public static final boolean LOCAL_FIRST_MEDIA = false;
+
     /** Photos, videos and documents through our own file store. */
     public static final boolean MEDIA_FROM_PLATFORM = BuildConfig.DEBUG;
     public static final String[][] DEV_LOGIN_ACCOUNTS = {

@@ -15,7 +15,8 @@ JAVA = ROOT / "TMessagesProj/src/main/java/org/telegram"
 MT_PROTO = ("sendRequest", "ConnectionsManager", "getMessagesStorage(", "MessagesStorage.getInstance",
             "TLRPC.TL_messages_")
 GUARD = ("PlatformChatSync.isEnabled()", "PlatformDialogsSync.isEnabled()",
-         "PlatformContactsSync.isEnabled()", "PlatformMediaSync.isEnabled()")
+         "PlatformContactsSync.isEnabled()", "PlatformMediaSync.isEnabled()",
+         "PlatformLocalSend.isEnabled()")
 
 SEAMS = [
     ("ui/DialogsActivity.java", "public static void loadDialogs(AccountInstance accountInstance)", "dialog list load"),
@@ -97,6 +98,8 @@ def main() -> int:
         "platform/repo/MediaRepository.java": ("ConnectionsManager", "sendRequest(", "MessagesStorage",
                                                "TLRPC.", "FileLoader"),
         "platform/tl/PlatformMediaSync.java": ("ConnectionsManager", "sendRequest(", "MessagesStorage",
+                                               "FileLoader", "getFileLoader", "ImageLoader"),
+        "platform/tl/PlatformLocalSend.java": ("ConnectionsManager", "sendRequest(", "MessagesStorage",
                                                "FileLoader", "getFileLoader", "ImageLoader"),
     }
     for relative, markers in banned.items():

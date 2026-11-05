@@ -1547,6 +1547,9 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     public void cancelSendingMessage(MessageObject object) {
+        if (org.telegram.platform.tl.PlatformLocalSend.isEnabled()) {
+            org.telegram.platform.tl.PlatformLocalSend.cancel(object);
+        }
         ArrayList<MessageObject> arrayList = new ArrayList<>();
         arrayList.add(object);
         if (object != null && object.type == MessageObject.TYPE_PAID_MEDIA) {
@@ -1713,6 +1716,10 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     }
 
     public boolean retrySendMessage(MessageObject messageObject, boolean unsent, long payStars) {
+        if (org.telegram.platform.tl.PlatformLocalSend.isEnabled()
+                && org.telegram.platform.tl.PlatformLocalSend.retry(this, messageObject)) {
+            return true;
+        }
         if (messageObject.getId() >= 0) {
             if (messageObject.isEditing()) {
                 editMessage(messageObject, null, null, null, null, null, null, true, messageObject.hasMediaSpoilers(), messageObject);
@@ -4428,6 +4435,97 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
         });
     }
 
+    // ---------------------------------------------------------------- platform
+    // Local-first media sending. The sequence mirrors createSendingGramTransfer:
+    // a local message with MESSAGE_SEND_STATE_SENDING is written to storage, added
+    // to the chat, registered in sendingMessages/uploadingMessages, and only then
+    // uploaded. That is what makes the existing bubble, cancel and retry work.
+
+    public MessageObject platformSendLocalMedia(long dialogId, String path, String kind,
+                                                String caption, long replyTo) {
+        if (!org.telegram.platform.tl.PlatformLocalSend.isEnabled()) {
+            return null;
+        }
+        if (org.telegram.platform.tl.PlatformMediaSync.isUploading(path)) {
+            // A double tap must not create a second bubble for the same file.
+            return null;
+        }
+        File file = new File(path);
+        if (!file.exists()) {
+            return null;
+        }
+        TLRPC.TL_message message = new TLRPC.TL_message();
+        message.local_id = message.id = getUserConfig().getNewMessageId();
+        message.dialog_id = dialogId;
+        message.out = true;
+        message.unread = true;
+        message.from_id = new TLRPC.TL_peerUser();
+        message.from_id.user_id = getUserConfig().getClientUserId();
+        message.flags |= 256;
+        if (dialogId < 0) {
+            TLRPC.TL_peerChat peer = new TLRPC.TL_peerChat();
+            peer.chat_id = -dialogId;
+            message.peer_id = peer;
+        } else {
+            TLRPC.TL_peerUser peer = new TLRPC.TL_peerUser();
+            peer.user_id = dialogId;
+            message.peer_id = peer;
+        }
+        message.date = getConnectionsManager().getCurrentTime();
+        message.message = caption == null ? "" : caption;
+        message.send_state = MessageObject.MESSAGE_SEND_STATE_SENDING;
+        org.telegram.platform.tl.PlatformMediaSync.attachLocalMedia(message, path, kind);
+        getUserConfig().saveConfig(false);
+
+        MessageObject object = new MessageObject(currentAccount, message, false, true);
+        object.wasJustSent = true;
+        ArrayList<TLRPC.Message> messages = new ArrayList<>();
+        messages.add(message);
+        getMessagesStorage().putMessages(messages, false, true, false, 0, 0, 0);
+        ArrayList<MessageObject> objects = new ArrayList<>();
+        objects.add(object);
+        getMessagesController().updateInterfaceWithMessages(dialogId, objects, 0);
+        getNotificationCenter().postNotificationName(NotificationCenter.dialogsNeedReload);
+        putToSendingMessages(message, false);
+        putToUploadingMessages(object);
+        org.telegram.platform.tl.PlatformLocalSend.start(this, object, path, kind, caption, replyTo);
+        return object;
+    }
+
+    /** The backend created the message: flip the bubble to SENT under its id. */
+    public void platformConfirmLocalMedia(MessageObject object, int serverId) {
+        if (object == null) {
+            return;
+        }
+        removeFromUploadingMessages(object.getId(), false);
+        sendingMessages.remove(object.getId());
+        object.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SENT;
+        object.messageOwner.id = serverId;
+        getNotificationCenter().postNotificationName(NotificationCenter.updateInterfaces,
+                MessagesController.UPDATE_MASK_MESSAGE_TEXT);
+    }
+
+    /** Upload failed: SEND_ERROR is what shows the retry affordance. */
+    public void platformFailLocalMedia(MessageObject object) {
+        if (object == null) {
+            return;
+        }
+        removeFromUploadingMessages(object.getId(), false);
+        object.messageOwner.send_state = MessageObject.MESSAGE_SEND_STATE_SEND_ERROR;
+        getNotificationCenter().postNotificationName(NotificationCenter.messageSendError,
+                object.getId());
+    }
+
+    /** The user cancelled: stop the stream and drop the placeholder. */
+    public void platformCancelLocalMedia(MessageObject object) {
+        if (object == null) {
+            return;
+        }
+        org.telegram.platform.tl.PlatformLocalSend.cancel(object);
+        removeFromUploadingMessages(object.getId(), false);
+        sendingMessages.remove(object.getId());
+    }
+
     private static boolean isPlatformMedia(SendMessageParams params) {
         if (params == null || params.path == null || params.path.isEmpty()) {
             return false;
@@ -4450,12 +4548,18 @@ public class SendMessagesHelper extends BaseController implements NotificationCe
     public void sendMessage(SendMessageParams sendMessageParams) {
         if (org.telegram.platform.tl.PlatformMediaSync.isEnabled()
                 && isPlatformMedia(sendMessageParams)) {
-            // The picker already produced a local file: upload it, then the server
-            // creates the message and fans it out over the socket.
-            org.telegram.platform.tl.PlatformMediaSync.sendMedia(sendMessageParams.peer,
-                    new java.io.File(sendMessageParams.path),
-                    sendMessageParams.photo != null ? "photo" : "document",
-                    sendMessageParams.message, null);
+            String kind = sendMessageParams.photo != null ? "photo" : "document";
+            if (org.telegram.platform.tl.PlatformLocalSend.isEnabled()) {
+                // Local-first: the bubble exists before a single byte is uploaded.
+                platformSendLocalMedia(sendMessageParams.peer, sendMessageParams.path, kind,
+                        sendMessageParams.message, 0);
+            } else {
+                // The picker already produced a local file: upload it, then the server
+                // creates the message and fans it out over the socket.
+                org.telegram.platform.tl.PlatformMediaSync.sendMedia(sendMessageParams.peer,
+                        new java.io.File(sendMessageParams.path), kind,
+                        sendMessageParams.message, null);
+            }
             return;
         }
         if (org.telegram.platform.tl.PlatformChatSync.isEnabled() && isPlainText(sendMessageParams)) {

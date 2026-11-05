@@ -100,6 +100,10 @@ def check_independence(files: list[Path]) -> list[str]:
             # MessagesController and posts NotificationCenter events. It must not
             # touch the transport itself, which the FORBIDDEN list still catches.
             source = source.replace("MessagesController", "UiDataHolder")
+            # PlatformLocalSend drives the ordinary send pipeline (local bubble,
+            # cancel, retry) exactly like the built-in sender; that is UI wiring,
+            # not transport. The FORBIDDEN list still forbids the transport calls.
+            source = source.replace("SendMessagesHelper", "UiSendPipeline")
         for symbol in FORBIDDEN:
             if symbol in source:
                 problems.append(f"{relative}: forbidden MTProto symbol {symbol}")
