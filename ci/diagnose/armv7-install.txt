@@ -1,1 +1,1 @@
-trigger: run 2 — longer emulator boot, image availability, PR comment report
+trigger: run 3 — adb on PATH, AVD creation with pixel_2, arm64 image attempt

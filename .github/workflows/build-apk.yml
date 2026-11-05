@@ -12,15 +12,18 @@ on:
         type: choice
         options: ["full", "compile"]
   # PR runs are what make this workflow usable from a sandbox whose pushes are
-  # made by a GitHub App (those do not trigger push runs).
+  # made by a GitHub App (those do not trigger push runs). Only source changes
+  # start a ~50 minute native build; CI/docs-only commits do not.
   pull_request:
     branches: ["master"]
-  push:
-    branches: ["arena/76249c66-telegram"]
     paths:
-      - ".github/workflows/build-apk.yml"
-      - "TMessagesProj/src/main/java/org/telegram/platform/**"
-      - "TMessagesProj/src/main/java/org/telegram/tgnet/ConnectionsManager.java"
+      - "TMessagesProj/**"
+      - "TMessagesProj_App/**"
+      - "build.gradle"
+      - "settings.gradle"
+      - "gradle.properties"
+      - "gradle/**"
+      - "TMessagesProj/config/**"
 
 permissions:
   contents: read
