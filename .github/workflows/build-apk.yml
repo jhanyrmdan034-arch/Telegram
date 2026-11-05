@@ -294,6 +294,18 @@ jobs:
           set -o pipefail
           ./gradlew --no-daemon :TMessagesProj_App:assembleAfatDebug --stacktrace 2>&1 | tee debug-build.log
 
+      - name: Report debug build errors as annotations
+        if: failure()
+        run: |
+          if [ -f debug-build.log ]; then
+            grep -E "error:|FAILURE|What went wrong|Execution failed|Caused by|Could not" debug-build.log \
+              | head -25 | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+            done
+          else
+            echo "::error::debug-build.log was not produced"
+          fi
+
       - name: Start the proprietary backend
         working-directory: platform/backend
         run: |
