@@ -37,6 +37,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          submodules: false
+
+      # settings.gradle applies TMessagesProj_Modules/media/core_settings.gradle and
+      # includes TMessagesProj/lib/jlatexmath, so those two submodules must exist
+      # before Gradle can even configure the project.
+      - name: Check out the Gradle modules (shallow)
+        run: |
+          git config --global protocol.version 2
+          git submodule update --init --depth=1 TMessagesProj_Modules/media TMessagesProj/lib/jlatexmath
+          ls TMessagesProj_Modules/media | head -5
 
       - name: Set up JDK 17
         uses: actions/setup-java@v5
