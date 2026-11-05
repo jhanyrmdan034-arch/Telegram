@@ -11,6 +11,10 @@ on:
         default: "full"
         type: choice
         options: ["full", "compile"]
+  # PR runs are what make this workflow usable from a sandbox whose pushes are
+  # made by a GitHub App (those do not trigger push runs).
+  pull_request:
+    branches: ["master"]
   push:
     branches: ["arena/76249c66-telegram"]
     paths:
