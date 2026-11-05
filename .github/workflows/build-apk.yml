@@ -224,6 +224,141 @@ jobs:
           path: Telegram-*
           if-no-files-found: error
 
+  # 32-bit ARM build. The same sources, the same signing, only the ABI differs:
+  # armeabi-v7a covers older phones that cannot install the arm64 APK.
+  apk-armv7:
+    name: Build APK (armv7)
+    if: ${{ github.event.inputs.mode != 'compile' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Free disk space + add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/share/powershell /opt/az 2>/dev/null || true
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          df -h
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Init submodules (shallow)
+        run: |
+          git config --global protocol.version 2
+          git submodule update --init --recursive --depth=1 --jobs=8
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install SDK packages (API 36, NDK, CMake)
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || SDKMANAGER="$(command -v sdkmanager)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1" "platform-tools"
+          df -h
+
+      - name: Restrict to armeabi-v7a
+        run: |
+          sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "armeabi-v7a"/' TMessagesProj_App/build.gradle
+          grep -n "abiFilters" TMessagesProj_App/build.gradle
+          # The prebuilt static libraries the CMake build links must exist per ABI.
+          ls -1 TMessagesProj/jni/prebuild/lib/armeabi-v7a | head -20
+
+      - name: Use a separate package name (installs alongside official Telegram)
+        run: |
+          NEW_PKG="org.telegram.messenger.fork"
+          sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=$NEW_PKG/" gradle.properties
+          grep "^APP_PACKAGE=" gradle.properties
+          NEW_PKG="$NEW_PKG" python3 - <<'PYEOF'
+          import json, os, glob
+          new_pkg = os.environ['NEW_PKG']
+          for path in sorted(glob.glob('*/google-services.json')):
+              with open(path) as handle:
+                  data = json.load(handle)
+              names = [c['client_info']['android_client_info']['package_name'] for c in data['client']]
+              if new_pkg not in names:
+                  client = json.loads(json.dumps(data['client'][0]))
+                  client['client_info']['android_client_info']['package_name'] = new_pkg
+                  data['client'].append(client)
+                  with open(path, 'w') as handle:
+                      json.dump(data, handle, indent=2)
+                      handle.write('\n')
+              print(path, '->', names + ([new_pkg] if new_pkg not in names else []))
+          PYEOF
+
+      - name: Build release APK (armeabi-v7a)
+        run: |
+          set -o pipefail
+          ./gradlew :TMessagesProj_App:assembleAfatRelease --stacktrace 2>&1 | tee build-armv7.log
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          if [ -f build-armv7.log ]; then
+            grep -E "error:|FAILURE|What went wrong|Execution failed|Caused by|Could not" build-armv7.log \
+              | head -25 | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+            done
+          else
+            echo "::error::build-armv7.log was not produced"
+          fi
+
+      # The deliverable is a 32-bit APK: prove it before uploading anything.
+      - name: Verify APK is 32-bit ARM
+        run: |
+          APK="TMessagesProj_App/build/outputs/apk/afat/release/app.apk"
+          test -f "$APK"
+          echo "== ABIs inside the APK =="
+          unzip -l "$APK" | awk '{print $4}' | grep '^lib/' | cut -d/ -f2 | sort -u | tee abis.txt
+          if [ "$(cat abis.txt)" != "armeabi-v7a" ]; then
+            echo "::error::expected only armeabi-v7a, found: $(cat abis.txt | tr '\n' ' ')"
+            exit 1
+          fi
+          READELF=$(ls "$ANDROID_HOME"/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf | head -1)
+          echo "readelf: $READELF"
+          rm -rf apklibs && mkdir -p apklibs && (cd apklibs && unzip -q -o "../$APK" 'lib/*')
+          FAIL=0
+          for so in $(find apklibs -name '*.so' | sort); do
+            info=$("$READELF" -h "$so" | grep -E 'Class:|Machine:|Type:' | tr -s ' ' | tr '\n' ' ')
+            echo "$so -> $info"
+            if ! echo "$info" | grep -q 'ELF32' || ! echo "$info" | grep -q 'Machine: *ARM'; then
+              echo "::error::$so is not a 32-bit ARM object ($info)"
+              FAIL=1
+            fi
+          done
+          echo "libs checked: $(find apklibs -name '*.so' | wc -l)"
+          test "$FAIL" = "0"
+          echo "== 32-bit ARM verification passed =="
+
+      - name: Collect APK
+        run: |
+          ls -lh TMessagesProj_App/build/outputs/apk/afat/release/
+          cp TMessagesProj_App/build/outputs/apk/afat/release/app.apk "Telegram-${{ env.APP_VERSION }}-armv7.apk"
+          sha256sum "Telegram-${{ env.APP_VERSION }}-armv7.apk" | tee "Telegram-${{ env.APP_VERSION }}-armv7.apk.sha256"
+          ls -lh Telegram-*
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-apk-armv7
+          path: |
+            Telegram-*-armv7.apk
+            Telegram-*-armv7.apk.sha256
+          if-no-files-found: error
+
   emulator:
     name: Emulator smoke test (login flow)
     if: ${{ github.event.inputs.mode != 'compile' }}
