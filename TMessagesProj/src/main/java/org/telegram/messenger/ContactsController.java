@@ -561,6 +561,36 @@ public class ContactsController extends BaseController {
         });
     }
 
+    /**
+     * Installs the contact list served by our backend into the structures this
+     * screen already renders: the dictionary, the sections and their order.
+     */
+    public void platformSetContacts(ArrayList<TLRPC.User> users) {
+        contactsDict.clear();
+        usersSectionsDict.clear();
+        sortedUsersSectionsArray.clear();
+        HashMap<String, ArrayList<TLRPC.TL_contact>> sections = new HashMap<>();
+        for (TLRPC.User user : users) {
+            TLRPC.TL_contact contact = new TLRPC.TL_contact();
+            contact.user_id = user.id;
+            contactsDict.put(user.id, contact);
+            String title = user.first_name != null && !user.first_name.isEmpty()
+                    ? user.first_name : (user.username != null ? user.username : "#");
+            String section = title.substring(0, 1).toUpperCase();
+            ArrayList<TLRPC.TL_contact> bucket = sections.get(section);
+            if (bucket == null) {
+                bucket = new ArrayList<>();
+                sections.put(section, bucket);
+            }
+            bucket.add(contact);
+        }
+        usersSectionsDict.putAll(sections);
+        ArrayList<String> sorted = new ArrayList<>(sections.keySet());
+        java.util.Collections.sort(sorted);
+        sortedUsersSectionsArray.addAll(sorted);
+        getNotificationCenter().postNotificationName(NotificationCenter.contactsDidLoad, true);
+    }
+
     public void resetImportedContacts() {
         TLRPC.TL_contacts_resetSaved req = new TLRPC.TL_contacts_resetSaved();
         getConnectionsManager().sendRequest(req, (response, error) -> {
@@ -1506,6 +1536,10 @@ public class ContactsController extends BaseController {
     }
 
     public void loadContacts(boolean fromCache, final long hash) {
+        if (org.telegram.platform.tl.PlatformContactsSync.isEnabled()) {
+            org.telegram.platform.tl.PlatformContactsSync.loadContacts(currentAccount);
+            return;
+        }
         synchronized (loadContactsSync) {
             loadingContacts = true;
         }

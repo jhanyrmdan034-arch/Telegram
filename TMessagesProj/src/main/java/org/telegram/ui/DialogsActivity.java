@@ -2987,6 +2987,14 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
 
     public static void loadDialogs(AccountInstance accountInstance) {
         int currentAccount = accountInstance.getCurrentAccount();
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            // Dialogs come from the proprietary backend; everything else in this
+            // method (settings, stickers, hints) still runs exactly as before.
+            org.telegram.platform.tl.PlatformDialogsSync.refresh(currentAccount);
+            dialogsLoaded[currentAccount] = true;
+            accountInstance.getMessagesController().loadGlobalNotificationsSettings();
+            return;
+        }
         if (!dialogsLoaded[currentAccount]) {
             MessagesController messagesController = accountInstance.getMessagesController();
             messagesController.loadGlobalNotificationsSettings();
@@ -9631,6 +9639,11 @@ public class DialogsActivity extends BaseFragment implements NotificationCenter.
     }
 
     private void pinDialog(long selectedDialog, boolean pin, MessagesController.DialogFilter filter, int minPinnedNum, boolean animated) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            // Same row, same animation: only the source of truth changes.
+            org.telegram.platform.tl.PlatformDialogActions.setPinned(selectedDialog, pin, null);
+            return;
+        }
 
         int selectedDialogIndex = -1;
         int currentDialogIndex = -1;

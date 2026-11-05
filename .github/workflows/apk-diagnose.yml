@@ -1,0 +1,375 @@
+name: Diagnose APK (install on Android 10)
+
+# Downloads an already-built APK (no native rebuild), inspects it, and performs
+# a real `adb install` on emulators:
+#   * Android 10 (API 29) x86_64  -> proves signature / manifest / parse are valid
+#   * Android 11 (API 30) arm64   -> proves the real ARM code path (32-bit libs)
+# The result of every attempt is published as a PR comment and as annotations.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Run id that owns the Telegram-apk-armv7 artifact"
+        default: "42013089142"
+  push:
+    branches: ["arena/76249c66-telegram"]
+    paths:
+      - "ci/diagnose/**"
+      - ".github/workflows/apk-diagnose.yml"
+
+permissions:
+  actions: read
+  contents: read
+  pull-requests: write
+
+env:
+  ARTIFACT_RUN_ID: ${{ github.event.inputs.run_id || '42013089142' }}
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - name: Free disk space + add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /opt/az 2>/dev/null || true
+          sudo fallocate -l 8G /swapfile || true
+          sudo chmod 600 /swapfile || true
+          sudo mkswap /swapfile || true
+          sudo swapon /swapfile || true
+          df -h | tail -2
+
+      - name: Download the APK from its build run
+        uses: actions/download-artifact@v4
+        with:
+          name: Telegram-apk-armv7
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: apk
+
+      - name: Install Android tooling and put adb on PATH
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || SDKMANAGER="$(command -v sdkmanager)"
+          echo "SDKMANAGER=$SDKMANAGER" >> "$GITHUB_ENV"
+          echo "AVDMANAGER=$(dirname "$SDKMANAGER")/avdmanager" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/emulator" >> "$GITHUB_PATH"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platform-tools" "emulator" "build-tools;36.0.0" "platforms;android-29" >/dev/null
+          mkdir -p "$HOME/.android/avd"
+          echo "ANDROID_AVD_HOME=$HOME/.android/avd" >> "$GITHUB_ENV"
+          echo "ADB=$ANDROID_HOME/platform-tools/adb" >> "$GITHUB_ENV"
+          echo "EMU=$ANDROID_HOME/emulator/emulator" >> "$GITHUB_ENV"
+          "$ANDROID_HOME/platform-tools/adb" version | head -2
+
+      - name: Static inspection of the APK
+        run: |
+          set +e
+          APK=$(ls apk/*.apk | head -1)
+          echo "APK=$APK" >> "$GITHUB_ENV"
+          echo "apk=$APK size=$(wc -c < "$APK")" > report-facts.txt
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+          "$BT/aapt2" dump badging "$APK" > badging.txt 2>&1
+          grep -E "^package:|sdkVersion|targetSdkVersion|native-code" badging.txt | head -5 | tee -a report-facts.txt
+          "$BT/apksigner" verify --verbose --print-certs "$APK" > sig.txt 2>&1
+          echo "apksigner_exit=$?" >> sig.txt
+          grep -E "^Verifies|Verified using|Signer #1 certificate DN|key size" sig.txt | tee -a report-facts.txt
+          "$BT/aapt2" dump xmltree "$APK" --file AndroidManifest.xml > manifest.txt 2>&1
+          grep -E "extractNativeLibs|testOnly|debuggable|minSdkVersion|targetSdkVersion|versionCode" manifest.txt \
+            | sed 's/^ *//' | head -8 | tee -a report-facts.txt
+          unzip -l "$APK" | awk '$4 ~ /^lib\// {print $1, $4}' > libs.txt
+          echo "native_libs=$(grep -c '\.so$' libs.txt) abis=$(cut -d/ -f2 libs.txt | sort -u | tr '\n' ',')" | tee -a report-facts.txt
+          "$BT/zipalign" -c -P 16 -v 4 "$APK" > align.txt 2>&1
+          echo "zipalign_exit=$?" | tee -a align.txt | tee -a report-facts.txt
+          echo "::notice title=APK::$(tr '\n' ' ' < report-facts.txt | cut -c1-900)"
+
+      - name: Emulator preflight (kvm, images)
+        run: |
+          set +e
+          echo "adb=$(command -v adb)"
+          if [ -e /dev/kvm ]; then echo "kvm=present"; ls -l /dev/kvm; else echo "kvm=MISSING"; fi
+          "$EMU" -accel-check 2>&1 | head -3
+          "$SDKMANAGER" --list 2>/dev/null | grep -E "system-images;android-29" | head -6 > avail29.txt
+          "$SDKMANAGER" --list 2>/dev/null | grep -E "system-images;android-(29|30);[a-z_]+;arm64-v8a" | head -6 > availarm.txt
+          "$SDKMANAGER" --list 2>/dev/null | grep -E "armeabi-v7a" | head -4 > availv7.txt
+          echo "::notice title=Avail29::$(tr '\n' ' ' < avail29.txt | cut -c1-500)"
+          echo "::notice title=AvailArm::$(tr '\n' ' ' < availarm.txt | cut -c1-500)"
+          echo "::notice title=AvailArmv7::$(tr '\n' ' ' < availv7.txt | cut -c1-400)"
+          { echo "--- kvm ---"; ls -l /dev/kvm 2>&1; echo "--- accel-check ---"; "$EMU" -accel-check 2>&1 | head -3; } > preflight.txt
+          cat avail29.txt availarm.txt availv7.txt >> preflight.txt
+
+      # ---------- Android 10 x86_64: signature / manifest / parse ----------
+      - name: Install on Android 10 (x86_64)
+        run: |
+          set +e
+          "$SDKMANAGER" "system-images;android-29;default;x86_64" > img-x86.log 2>&1
+          echo no | "$AVDMANAGER" create avd -n api29x -k "system-images;android-29;default;x86_64" \
+            --device "pixel_2" --force > avd-x86.log 2>&1
+          echo "avdmanager_exit=$?" | tee avd-create.txt
+          "$AVDMANAGER" list avd >> avd-create.txt 2>&1
+          ls -l "$ANDROID_AVD_HOME" >> avd-create.txt 2>&1
+          nohup "$EMU" -avd api29x -no-window -no-audio -no-boot-anim -no-snapshot \
+            -gpu swiftshader_indirect -memory 2048 -accel auto -camera-back none -camera-front none \
+            > emu-x86.log 2>&1 &
+          timeout 240 "$ADB" wait-for-device
+          echo "wait_for_device_rc=$?" | tee -a emu-x86.log
+          for i in $(seq 1 60); do
+            [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
+            sleep 10
+          done
+          BOOT=$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+          SDK=$("$ADB" shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')
+          ABIS=$("$ADB" shell getprop ro.product.cpu.abilist 2>/dev/null | tr -d '\r')
+          echo "boot_completed=$BOOT sdk=$SDK abilist=$ABIS" | tee -a emu-x86.log
+          if [ "$BOOT" = "1" ]; then
+            "$ADB" logcat -c
+            "$ADB" install -r -d "$APK" > install-x86.txt 2>&1
+            echo "adb_install_exit=$?" >> install-x86.txt
+            "$ADB" logcat -d | grep -iE "PackageManager|PackageInstaller|installd" | tail -30 > logcat-x86.txt
+          else
+            echo "emulator did not finish booting; no install attempted" > install-x86.txt
+            tail -20 emu-x86.log > logcat-x86.txt
+          fi
+          cat install-x86.txt
+          echo "::notice title=Android10_x86_64::boot=$BOOT sdk=$SDK abilist=$ABIS | $(tail -3 install-x86.txt | tr '\n' ' ' | cut -c1-700)"
+
+      # ---------- ARM code path (arm64 image, 32-bit support) ----------
+      - name: Install on ARM (arm64-v8a, API 30)
+        if: always()
+        run: |
+          set +e
+          "$ADB" kill-server; sleep 2
+          IMG="system-images;android-30;google_apis;arm64-v8a"
+          if ! "$SDKMANAGER" "$IMG" > img-arm.log 2>&1; then
+            echo "arm image unavailable" > install-arm.txt
+            echo "::warning title=ArmImage::could not install $IMG"
+            exit 0
+          fi
+          echo no | "$AVDMANAGER" create avd -n arm64a -k "$IMG" --device "pixel_2" --force > avd-arm.log 2>&1
+          echo "avdmanager_exit=$?" >> avd-arm.log
+          "$AVDMANAGER" list avd >> avd-arm.log 2>&1
+          nohup "$EMU" -avd arm64a -no-window -no-audio -no-boot-anim -no-snapshot \
+            -gpu swiftshader_indirect -memory 2048 -accel off \
+            > emu-arm.log 2>&1 &
+          timeout 300 "$ADB" wait-for-device
+          echo "wait_for_device_rc=$?" >> emu-arm.log
+          for i in $(seq 1 75); do
+            [ "$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ] && break
+            sleep 20
+          done
+          BOOT=$("$ADB" shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+          ABIS=$("$ADB" shell getprop ro.product.cpu.abilist 2>/dev/null | tr -d '\r')
+          SDK=$("$ADB" shell getprop ro.build.version.sdk 2>/dev/null | tr -d '\r')
+          echo "boot_completed=$BOOT sdk=$SDK abilist=$ABIS" >> emu-arm.log
+          if [ "$BOOT" = "1" ]; then
+            "$ADB" logcat -c
+            "$ADB" install -r -d "$APK" > install-arm.txt 2>&1
+            echo "adb_install_exit=$?" >> install-arm.txt
+            "$ADB" logcat -d | grep -iE "PackageManager|PackageInstaller|installd" | tail -30 > logcat-arm.txt
+          else
+            echo "ARM emulator did not finish booting within 25 min; no install attempted" > install-arm.txt
+            tail -20 emu-arm.log > logcat-arm.txt
+          fi
+          cat install-arm.txt
+          echo "::notice title=ARM_arm64::boot=$BOOT sdk=$SDK abilist=$ABIS | $(tail -3 install-arm.txt | tr '\n' ' ' | cut -c1-700)"
+
+      - name: Publish the diagnosis on the pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### APK install diagnosis (run $GITHUB_RUN_ID)"
+            echo
+            echo '```'
+            cat report-facts.txt 2>/dev/null
+            echo '```'
+            for f in install-x86.txt logcat-x86.txt install-arm.txt logcat-arm.txt \
+                     preflight.txt avd-create.txt avd-arm.log emu-x86.log emu-arm.log img-arm.log libs.txt; do
+              [ -f "$f" ] || continue
+              echo "<details><summary>$f</summary>"
+              echo
+              echo '```'
+              tail -25 "$f"
+              echo '```'
+              echo "</details>"
+              echo
+            done
+          } > report.md
+          wc -c report.md
+          gh pr comment 1 --body-file report.md \
+            || gh api "repos/$GITHUB_REPOSITORY/issues/1/comments" -F body=@report.md
+
+      - name: Upload diagnosis reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apk-diagnosis
+          path: |
+            report-facts.txt
+            badging.txt
+            sig.txt
+            manifest.txt
+            libs.txt
+            align.txt
+            install-*.txt
+            logcat-*.txt
+            preflight.txt
+            emu-*.log
+            img-*.log
+            avd-*.log
+            avail*.txt
+          if-no-files-found: warn
+
+  # The Linux runners have no KVM and Google's emulator can no longer run ARM
+  # images on an x86 host, so a real ARM install needs a virtualised macOS
+  # runner (HVF) with an arm64 system image that also carries 32-bit support.
+  diagnose-arm-macos:
+    name: Real ARM install (Android 10/11 emulator on macOS)
+    runs-on: macos-14
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - api-level: 30
+            target: google_apis
+          - api-level: 34
+            target: default
+    steps:
+      - name: Download the APK from its build run
+        uses: actions/download-artifact@v4
+        with:
+          name: Telegram-apk-armv7
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: apk
+
+      - name: Inspect before installing
+        run: |
+          APK=$(ls apk/*.apk | head -1)
+          echo "apk=$APK size=$(wc -c < "$APK")" | tee facts.txt
+          shasum -a 256 "$APK" | tee -a facts.txt
+
+      - name: Install the real APK on an ARM Android emulator
+        id: install
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          target: ${{ matrix.target }}
+          arch: arm64-v8a
+          profile: pixel_2
+          emulator-boot-timeout: 1800
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -camera-back none -camera-front none
+          script: |
+            set +e
+            {
+              echo "device_abilist=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
+              echo "device_sdk=$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+              echo "device_model=$(adb shell getprop ro.product.model | tr -d '\r')"
+            } | tee device.txt
+            APK=$(ls apk/*.apk | head -1)
+            adb logcat -c
+            adb install -r -d "$APK" > install.txt 2>&1
+            echo "adb_install_exit=$?" >> install.txt
+            cat install.txt
+            adb shell pm list packages 2>/dev/null | grep -i fork > installed.txt 2>&1
+            cat installed.txt
+            adb logcat -d | grep -iE "PackageManager|PackageInstaller|installd" | tail -40 > logcat.txt
+            tail -12 logcat.txt
+            if grep -qE "Success" install.txt; then
+              adb shell monkey -p org.telegram.messenger.fork -c android.intent.category.LAUNCHER 1 > launch.txt 2>&1
+              echo "launch_exit=$?" >> launch.txt
+              adb shell pidof org.telegram.messenger.fork >> launch.txt 2>&1
+              echo "process=$(adb shell pidof org.telegram.messenger.fork | tr -d '\r')" >> launch.txt
+              cat launch.txt
+            fi
+
+      - name: Publish the result on the pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### Real install attempt — API ${{ matrix.api-level }} (${{ matrix.target }}), arm64-v8a (macOS/HVF), run $GITHUB_RUN_ID"
+            echo
+            for f in facts.txt device.txt install.txt installed.txt launch.txt logcat.txt; do
+              [ -f "$f" ] || continue
+              echo "<details><summary>$f</summary>"
+              echo
+              echo '```'
+              tail -20 "$f"
+              echo '```'
+              echo "</details>"
+              echo
+            done
+          } > report-arm.md
+          cat report-arm.md
+          gh pr comment 1 --body-file report-arm.md \
+            || gh api "repos/$GITHUB_REPOSITORY/issues/1/comments" -F body=@report-arm.md
+
+  # macOS Intel runners have working hardware acceleration (HVF), unlike the
+  # Linux runners where /dev/kvm is denied. An x86_64 Android 10 emulator cannot
+  # RUN arm libraries, but it does verify signature, manifest and archive first:
+  # a parse/signature defect would surface here as INSTALL_PARSE_FAILED_*, and a
+  # healthy APK must surface as INSTALL_FAILED_NO_MATCHING_ABIS.
+  diagnose-x86-macos:
+    name: PackageManager verdict (Android 10 x86_64, macOS/HVF)
+    runs-on: macos-13
+    timeout-minutes: 60
+    steps:
+      - name: Download the APK from its build run
+        uses: actions/download-artifact@v4
+        with:
+          name: Telegram-apk-armv7
+          run-id: ${{ env.ARTIFACT_RUN_ID }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: apk
+
+      - name: Install the APK on Android 10 (x86_64)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          profile: pixel_2
+          emulator-boot-timeout: 1200
+          disable-animations: true
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot
+          script: |
+            set +e
+            {
+              echo "device_abilist=$(adb shell getprop ro.product.cpu.abilist | tr -d '\r')"
+              echo "device_sdk=$(adb shell getprop ro.build.version.sdk | tr -d '\r')"
+            } | tee device.txt
+            APK=$(ls apk/*.apk | head -1)
+            adb logcat -c
+            adb install -r -d "$APK" > install.txt 2>&1
+            echo "adb_install_exit=$?" >> install.txt
+            cat install.txt
+            adb logcat -d | grep -iE "PackageManager|PackageInstaller|installd" | tail -40 > logcat.txt
+            tail -12 logcat.txt
+
+      - name: Publish the result on the pull request
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### PackageManager verdict — Android 10 x86_64 (macOS/HVF), run $GITHUB_RUN_ID"
+            echo
+            for f in device.txt install.txt logcat.txt; do
+              [ -f "$f" ] || continue
+              echo "<details><summary>$f</summary>"
+              echo
+              echo '```'
+              tail -20 "$f"
+              echo '```'
+              echo "</details>"
+              echo
+            done
+          } > report-x86mac.md
+          gh pr comment 1 --body-file report-x86mac.md \
+            || gh api "repos/$GITHUB_REPOSITORY/issues/1/comments" -F body=@report-x86mac.md

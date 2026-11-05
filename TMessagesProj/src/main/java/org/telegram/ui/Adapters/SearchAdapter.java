@@ -55,6 +55,8 @@ public class SearchAdapter extends RecyclerListView.SelectionAdapter {
     private Context mContext;
     private LongSparseArray<TLRPC.User> ignoreUsers;
     private ArrayList<Object> searchResult = new ArrayList<>();
+    /** Guards against an older platform search overwriting a newer one. */
+    private int platformSearchGeneration;
     private ArrayList<CharSequence> searchResultNames = new ArrayList<>();
     private SearchAdapterHelper searchAdapterHelper;
     private LongSparseArray<TLRPC.User> selectedUsers;
@@ -109,6 +111,35 @@ public class SearchAdapter extends RecyclerListView.SelectionAdapter {
     }
 
     public void searchDialogs(final String query) {
+        if (org.telegram.platform.tl.PlatformContactsSync.isEnabled() && allowUsernameSearch) {
+            searchResult.clear();
+            searchResultNames.clear();
+            final int generation = ++platformSearchGeneration;
+            if (query != null && !query.trim().isEmpty()) {
+                org.telegram.platform.tl.PlatformContactsSync.searchGlobal(query,
+                        new org.telegram.platform.repo.Callback<java.util.List<org.telegram.tgnet.TLRPC.User>>() {
+                            @Override
+                            public void onSuccess(java.util.List<org.telegram.tgnet.TLRPC.User> users) {
+                                if (generation != platformSearchGeneration) {
+                                    return;
+                                }
+                                for (org.telegram.tgnet.TLRPC.User user : users) {
+                                    searchResult.add(user);
+                                    searchResultNames.add(org.telegram.messenger.ContactsController
+                                            .formatName(user));
+                                }
+                                notifyDataSetChanged();
+                            }
+
+                            @Override
+                            public void onError(org.telegram.platform.PlatformException error) {
+                                notifyDataSetChanged();
+                            }
+                        });
+            }
+            notifyDataSetChanged();
+            return;
+        }
         try {
             if (searchTimer != null) {
                 searchTimer.cancel();

@@ -1,0 +1,577 @@
+name: Build Telegram APK
+
+# Real toolchain verification for the platform client. The development sandbox
+# cannot install a JDK or the Android SDK, so compilation, packaging and the
+# on-device smoke test are proven here.
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "compile = javac only, full = compile + APK + emulator smoke"
+        default: "full"
+        type: choice
+        options: ["full", "compile"]
+  # PR runs are what make this workflow usable from a sandbox whose pushes are
+  # made by a GitHub App (those do not trigger push runs). Only source changes
+  # start a ~50 minute native build; CI/docs-only commits do not.
+  pull_request:
+    branches: ["master"]
+    paths:
+      - "TMessagesProj/**"
+      - "TMessagesProj_App/**"
+      - "build.gradle"
+      - "settings.gradle"
+      - "gradle.properties"
+      - "gradle/**"
+      - "TMessagesProj/config/**"
+
+permissions:
+  contents: read
+
+env:
+  APP_VERSION: 13.1.1
+
+jobs:
+  compile:
+    name: Compile Java sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      # settings.gradle applies TMessagesProj_Modules/media/core_settings.gradle and
+      # includes TMessagesProj/lib/jlatexmath, so those two submodules must exist
+      # before Gradle can even configure the project.
+      - name: Check out the Gradle modules (shallow)
+        run: |
+          git config --global protocol.version 2
+          git submodule update --init --depth=1 TMessagesProj_Modules/media TMessagesProj/lib/jlatexmath
+          ls TMessagesProj_Modules/media | head -5
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install Android SDK packages
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || SDKMANAGER="$(command -v sdkmanager)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "platform-tools"
+          java -version
+
+      # This single task compiles every Java source of the app module, including
+      # org.telegram.platform.* and the patched ConnectionsManager.
+      - name: Compile Java sources
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon --stacktrace :TMessagesProj:compileDebugJavaWithJavac 2>&1 | tee compile.log \
+            || ./gradlew --no-daemon --stacktrace :TMessagesProj:compileAfatDebugJavaWithJavac 2>&1 | tee -a compile.log
+
+      # Job logs are not reachable from the development sandbox, but check-run
+      # annotations are, so the compiler's own words travel through this step.
+      - name: Report Java errors as annotations
+        if: failure()
+        run: |
+          if [ -f compile.log ]; then
+            COUNT=$(grep -cE "error:" compile.log || true)
+            echo "lines with 'error:' = $COUNT"
+            if [ "$COUNT" -gt 0 ]; then
+              grep -E "error:" compile.log | head -25 | while IFS= read -r line; do
+                echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+              done
+            else
+              # No javac errors: the failure happened earlier, so show what Gradle said.
+              grep -nE "FAILURE|What went wrong|Could not|Execution failed|Unsupported|requires|not found|No such file" compile.log \
+                | head -12 | while IFS= read -r line; do
+                echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+              done
+              tail -c 3000 compile.log | tr -d '\r' | tail -20 | while IFS= read -r line; do
+                echo "::warning::$(printf '%s' "$line" | cut -c1-900)"
+              done
+            fi
+          else
+            echo "::error::compile.log was not produced"
+          fi
+
+      - name: Upload compile log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-log
+          path: compile.log
+          if-no-files-found: ignore
+
+  apk:
+    name: Build APK
+    if: ${{ github.event.inputs.mode != 'compile' }}
+    needs: compile
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - name: Free disk space + add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/share/powershell /opt/az 2>/dev/null || true
+          sudo docker image prune -af 2>/dev/null || true
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          df -h
+          free -h
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Init submodules (shallow)
+        run: |
+          git config --global protocol.version 2
+          git submodule update --init --recursive --depth=1 --jobs=8
+          git submodule status | head -40
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install SDK packages (API 36, NDK, CMake)
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || SDKMANAGER="$(command -v sdkmanager)"
+          yes | "$SDKMANAGER" --licenses > /dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1" "platform-tools"
+          df -h
+
+      - name: Restrict to arm64
+        run: |
+          sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a"/' TMessagesProj_App/build.gradle
+          grep -n "abiFilters" TMessagesProj_App/build.gradle
+
+      - name: Use a separate package name (installs alongside official Telegram)
+        run: |
+          NEW_PKG="org.telegram.messenger.fork"
+          sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=$NEW_PKG/" gradle.properties
+          grep "^APP_PACKAGE=" gradle.properties
+          NEW_PKG="$NEW_PKG" python3 - <<'PYEOF'
+          import json, os, glob
+          new_pkg = os.environ['NEW_PKG']
+          for p in sorted(glob.glob('*/google-services.json')):
+              with open(p) as f:
+                  d = json.load(f)
+              if all(c['client_info']['android_client_info']['package_name'] != new_pkg for c in d['client']):
+                  client = json.loads(json.dumps(d['client'][0]))
+                  client['client_info']['android_client_info']['package_name'] = new_pkg
+                  d['client'].append(client)
+                  with open(p, 'w') as f:
+                      json.dump(d, f, indent=2)
+                      f.write('\n')
+              print(p, '->', [c['client_info']['android_client_info']['package_name'] for c in d['client']])
+          PYEOF
+          grep -rl 'name="AppName"' TMessagesProj/src/main/res/ | xargs sed -i 's|\(<string name="AppName"[^>]*>\)[^<]*|\1Telegram 2|'
+          grep -rh 'name="AppName"' TMessagesProj/src/main/res/ | sort -u
+
+      - name: Build release APK
+        run: |
+          set -o pipefail
+          ./gradlew :TMessagesProj_App:assembleAfatRelease --stacktrace 2>&1 | tee build.log
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          python3 - <<'PYEOF'
+          import re
+          try:
+              log = open('build.log', errors='replace').read()
+          except FileNotFoundError:
+              print('::error::build.log not found')
+              raise SystemExit
+          def emit(msg):
+              msg = msg.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+              print('::error::' + msg[:6000])
+          m = re.search(r'\* What went wrong:(.*?)(?=\n\* Try:|\Z)', log, re.S)
+          if m:
+              emit('GRADLE FAILURE:' + m.group(1)[:6000])
+          failed = [l for l in log.splitlines() if 'FAILED' in l or l.startswith('e: ')]
+          if failed:
+              emit('FAILED LINES:\n' + '\n'.join(failed[:40]))
+          emit('LOG TAIL:\n' + '\n'.join(log.splitlines()[-60:]))
+          PYEOF
+
+      - name: Collect APK
+        run: |
+          ls -lh TMessagesProj_App/build/outputs/apk/afat/release/
+          cp TMessagesProj_App/build/outputs/apk/afat/release/app.apk "Telegram-${{ env.APP_VERSION }}-arm64.apk"
+          sha256sum "Telegram-${{ env.APP_VERSION }}-arm64.apk" | tee "Telegram-${{ env.APP_VERSION }}-arm64.apk.sha256"
+          ls -lh Telegram-*
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-apk-arm64
+          path: Telegram-*
+          if-no-files-found: error
+
+  # 32-bit ARM build. The same sources, the same signing, only the ABI differs:
+  # armeabi-v7a covers older phones that cannot install the arm64 APK.
+  apk-armv7:
+    name: Build APK (armv7)
+    if: ${{ github.event.inputs.mode != 'compile' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Free disk space + add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/share/powershell /opt/az 2>/dev/null || true
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          df -h
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Init submodules (shallow)
+        run: |
+          git config --global protocol.version 2
+          git submodule update --init --recursive --depth=1 --jobs=8
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install SDK packages (API 36, NDK, CMake)
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || SDKMANAGER="$(command -v sdkmanager)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1" "platform-tools"
+          df -h
+
+      - name: Restrict to armeabi-v7a
+        run: |
+          sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "armeabi-v7a"/' TMessagesProj_App/build.gradle
+          grep -n "abiFilters" TMessagesProj_App/build.gradle
+          # The prebuilt static libraries the CMake build links must exist per ABI.
+          ls -1 TMessagesProj/jni/prebuild/lib/armeabi-v7a | head -20
+
+      - name: Use a separate package name (installs alongside official Telegram)
+        run: |
+          NEW_PKG="org.telegram.messenger.fork"
+          sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=$NEW_PKG/" gradle.properties
+          grep "^APP_PACKAGE=" gradle.properties
+          NEW_PKG="$NEW_PKG" python3 - <<'PYEOF'
+          import json, os, glob
+          new_pkg = os.environ['NEW_PKG']
+          for path in sorted(glob.glob('*/google-services.json')):
+              with open(path) as handle:
+                  data = json.load(handle)
+              names = [c['client_info']['android_client_info']['package_name'] for c in data['client']]
+              if new_pkg not in names:
+                  client = json.loads(json.dumps(data['client'][0]))
+                  client['client_info']['android_client_info']['package_name'] = new_pkg
+                  data['client'].append(client)
+                  with open(path, 'w') as handle:
+                      json.dump(data, handle, indent=2)
+                      handle.write('\n')
+              print(path, '->', names + ([new_pkg] if new_pkg not in names else []))
+          PYEOF
+
+      - name: Build release APK (armeabi-v7a)
+        run: |
+          set -o pipefail
+          ./gradlew :TMessagesProj_App:assembleAfatRelease --stacktrace 2>&1 | tee build-armv7.log
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          if [ -f build-armv7.log ]; then
+            grep -E "error:|FAILURE|What went wrong|Execution failed|Caused by|Could not" build-armv7.log \
+              | head -25 | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+            done
+          else
+            echo "::error::build-armv7.log was not produced"
+          fi
+
+      # The deliverable is a 32-bit APK: prove it before uploading anything.
+      - name: Verify APK is 32-bit ARM
+        run: |
+          APK="TMessagesProj_App/build/outputs/apk/afat/release/app.apk"
+          test -f "$APK"
+          echo "== ABIs inside the APK =="
+          unzip -l "$APK" | awk '{print $4}' | grep '^lib/' | cut -d/ -f2 | sort -u | tee abis.txt
+          if [ "$(cat abis.txt)" != "armeabi-v7a" ]; then
+            echo "::error::expected only armeabi-v7a, found: $(cat abis.txt | tr '\n' ' ')"
+            exit 1
+          fi
+          READELF=$(ls "$ANDROID_HOME"/ndk/*/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf | head -1)
+          echo "readelf: $READELF"
+          rm -rf apklibs && mkdir -p apklibs && (cd apklibs && unzip -q -o "../$APK" 'lib/*')
+          FAIL=0
+          for so in $(find apklibs -name '*.so' | sort); do
+            info=$("$READELF" -h "$so" | grep -E 'Class:|Machine:|Type:' | tr -s ' ' | tr '\n' ' ')
+            echo "$so -> $info"
+            if ! echo "$info" | grep -q 'ELF32' || ! echo "$info" | grep -q 'Machine: *ARM'; then
+              echo "::error::$so is not a 32-bit ARM object ($info)"
+              FAIL=1
+            fi
+          done
+          echo "libs checked: $(find apklibs -name '*.so' | wc -l)"
+          test "$FAIL" = "0"
+          echo "== 32-bit ARM verification passed =="
+
+      - name: Collect APK
+        run: |
+          ls -lh TMessagesProj_App/build/outputs/apk/afat/release/
+          cp TMessagesProj_App/build/outputs/apk/afat/release/app.apk "Telegram-${{ env.APP_VERSION }}-armv7.apk"
+          sha256sum "Telegram-${{ env.APP_VERSION }}-armv7.apk" | tee "Telegram-${{ env.APP_VERSION }}-armv7.apk.sha256"
+          ls -lh Telegram-*
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Telegram-apk-armv7
+          path: |
+            Telegram-*-armv7.apk
+            Telegram-*-armv7.apk.sha256
+          if-no-files-found: error
+
+  emulator:
+    name: Emulator smoke test (login flow)
+    if: ${{ github.event.inputs.mode != 'compile' }}
+    needs: apk
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: messenger
+          POSTGRES_USER: messenger
+          POSTGRES_DB: messenger
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: "postgresql+asyncpg://messenger:messenger@127.0.0.1:5432/messenger"
+      REDIS_URL: "memory://"
+      JWT_SECRET: "ci-secret-value-that-is-long-enough-0123456789"
+      OTP_DEBUG: "true"
+      SMS_PROVIDER: "log"
+      STORAGE_DIR: "${{ github.workspace }}/.data/files"
+      LOG_LEVEL: "info"
+    steps:
+      - name: Free disk space + add swap
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /usr/local/share/powershell /opt/az 2>/dev/null || true
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile
+          sudo fallocate -l 8G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          df -h
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: false
+
+      - name: Init submodules (shallow)
+        run: git submodule update --init --recursive --depth=1 --jobs=8
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Install SDK packages for the emulator
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          test -x "$SDKMANAGER" || SDKMANAGER="$(command -v sdkmanager)"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0" "ndk;27.2.12479018" "cmake;3.22.1" "platform-tools" "emulator" "system-images;android-35;google_apis;x86_64"
+          df -h
+
+      - name: Limit to x86_64 + arm64 for the emulator build
+        run: |
+          sed -i 's/abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"/abiFilters "arm64-v8a", "x86_64"/' TMessagesProj_App/build.gradle
+          sed -i "s/^APP_PACKAGE=.*/APP_PACKAGE=org.telegram.messenger.fork/" gradle.properties
+          # The debug build appends ".beta" to the package, which no google-services
+          # client matches and which would not be the package adb launches below.
+          sed -i 's/applicationIdSuffix ".beta"//' TMessagesProj_App/build.gradle
+          NEW_PKG="org.telegram.messenger.fork" python3 - <<'PYEOF'
+          import json, os, glob
+          new_pkg = os.environ['NEW_PKG']
+          for path in sorted(glob.glob('*/google-services.json')):
+              with open(path) as handle:
+                  data = json.load(handle)
+              names = [c['client_info']['android_client_info']['package_name'] for c in data['client']]
+              if new_pkg not in names:
+                  client = json.loads(json.dumps(data['client'][0]))
+                  client['client_info']['android_client_info']['package_name'] = new_pkg
+                  data['client'].append(client)
+                  with open(path, 'w') as handle:
+                      json.dump(data, handle, indent=2)
+                      handle.write('\n')
+              print(path, '->', [c['client_info']['android_client_info']['package_name'] for c in data['client']])
+          PYEOF
+          grep -n 'abiFilters\|applicationIdSuffix\|^APP_PACKAGE' TMessagesProj_App/build.gradle gradle.properties
+
+      - name: Build debug APK
+        run: |
+          set -o pipefail
+          ./gradlew --no-daemon :TMessagesProj_App:assembleAfatDebug --stacktrace 2>&1 | tee debug-build.log
+
+      - name: Report debug build errors as annotations
+        if: failure()
+        run: |
+          if [ -f debug-build.log ]; then
+            grep -E "error:|FAILURE|What went wrong|Execution failed|Caused by|Could not" debug-build.log \
+              | head -25 | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+            done
+          else
+            echo "::error::debug-build.log was not produced"
+          fi
+
+      - name: Start the proprietary backend
+        working-directory: platform/backend
+        run: |
+          set -o pipefail
+          BACKEND_LOG="$RUNNER_TEMP/backend.log"
+          exec > >(tee "$RUNNER_TEMP/backend-step.log") 2>&1
+          echo "== python =="; python3 --version
+          python3 -m venv .venv-ci
+          . .venv-ci/bin/activate
+          echo "== pip install =="
+          pip install --quiet -r requirements.txt
+          echo "== migrations =="
+          alembic upgrade head
+          mkdir -p "$STORAGE_DIR"
+          echo "== uvicorn =="
+          nohup python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 > "$BACKEND_LOG" 2>&1 &
+          echo $! > "$RUNNER_TEMP/backend.pid"
+          for i in $(seq 1 45); do
+            if curl -sf http://127.0.0.1:8000/api/v1/healthz > /dev/null \
+               || curl -sf http://127.0.0.1:8000/api/v1/config > /dev/null; then
+              echo "backend up after ${i} tries"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "== backend never answered; log follows =="
+          cat "$BACKEND_LOG" || true
+          exit 1
+
+      - name: Report backend startup errors
+        if: failure()
+        run: |
+          for f in "$RUNNER_TEMP/backend-step.log" "$RUNNER_TEMP/backend.log"; do
+            [ -f "$f" ] || continue
+            echo "--- $f ---"
+            grep -nE "Error|error:|Traceback|FAILED|Exception|ModuleNotFound|Connection refused" "$f" \
+              | tail -12 | while IFS= read -r line; do
+              echo "::error::$(printf '%s' "$line" | tr -d '\r' | cut -c1-900)"
+            done
+            tail -5 "$f" | tr -d '\r' | while IFS= read -r line; do
+              echo "::warning::$(printf '%s' "$line" | cut -c1-900)"
+            done
+          done
+
+      - name: Install and drive the app on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          emulator-options: "-no-window -no-audio -no-boot-anim -camera-back none"
+          disable-animations: true
+          script: |
+            set -x
+            adb install -r TMessagesProj_App/build/outputs/apk/afat/debug/app.apk
+            adb shell monkey -p org.telegram.messenger.fork -c android.intent.category.LAUNCHER 1
+            sleep 25
+            adb exec-out screencap -p > launch.png || true
+            # The login screen is reached automatically on a fresh install.
+            adb shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 || true
+            adb pull /sdcard/ui.xml ui.xml || true
+            if adb logcat -d -t 4000 | grep -Eq 'FATAL EXCEPTION'; then
+              echo "::error::app crashed on launch"
+              adb logcat -d -t 4000 | grep -A20 'FATAL EXCEPTION' || true
+              exit 1
+            fi
+            python3 - <<'PYEOF'
+            import re, subprocess, sys, time, xml.etree.ElementTree as ET
+
+            def sh(cmd):
+                return subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout
+
+            # Tap the phone field: the first EditText on the login screen.
+            try:
+                tree = ET.parse('ui.xml')
+            except Exception as exc:
+                print('no ui dump:', exc); sys.exit(0)
+            edits = [n.attrib for n in tree.iter('node') if n.attrib.get('class', '').endswith('EditText')]
+            print('edit fields:', [(e.get('text'), e.get('bounds')) for e in edits])
+            if not edits:
+                print('no EditText found; screen may still be loading'); sys.exit(0)
+            b = re.findall(r'\d+', edits[-1]['bounds'])
+            x = (int(b[0]) + int(b[2])) // 2
+            y = (int(b[1]) + int(b[3])) // 2
+            sh(f'adb shell input tap {x} {y}')
+            time.sleep(1)
+            sh('adb shell input text 4915112345678')
+            time.sleep(1)
+            sh('adb exec-out screencap -p > typed.png')
+            print('phone typed')
+            PYEOF
+
+      - name: Capture logs
+        if: always()
+        run: |
+          adb logcat -d > logcat.txt 2>/dev/null || true
+          echo "--- backend log ---"
+          cat "$RUNNER_TEMP/backend.log" 2>/dev/null | tail -80 || true
+
+      - name: Upload smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-smoke
+          path: |
+            launch.png
+            typed.png
+            ui.xml
+            logcat.txt
+            ${{ runner.temp }}/backend.log
+          if-no-files-found: ignore

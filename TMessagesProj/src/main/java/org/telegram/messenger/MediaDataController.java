@@ -3847,6 +3847,11 @@ public class MediaDataController extends BaseController {
     }
 
     public void searchMessagesInChat(String query, long dialogId, long mergeDialogId, int guid, int direction, long replyMessageId, boolean internal, TLRPC.User user, TLRPC.Chat chat, boolean jumpToMessage, ReactionsLayoutInBubble.VisibleReaction reaction) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled()) {
+            org.telegram.platform.tl.PlatformChatSync.searchInChat(dialogId, query, guid, direction,
+                    jumpToMessage);
+            return;
+        }
         int max_id = 0;
         long queryWithDialog = dialogId;
         boolean firstQuery = !internal;

@@ -1,0 +1,1 @@
+trigger: run 6 — macOS Intel Android 10 install verdict

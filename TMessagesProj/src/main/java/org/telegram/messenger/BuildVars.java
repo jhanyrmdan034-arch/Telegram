@@ -18,6 +18,44 @@ import java.util.Objects;
 
 public class BuildVars {
 
+    /**
+     * Proprietary backend endpoints. These are the only two values that have to
+     * change to point a build at staging or production.
+     * 10.0.2.2 is the host machine as seen from the Android emulator.
+     */
+    public static final String PLATFORM_API_URL = "http://10.0.2.2:8000";
+
+    /**
+     * Development login: type one of the codes below instead of a phone number to
+     * sign in as a seeded test account, with no SMS. Compiled to false in release
+     * builds, and the backend refuses the endpoint entirely outside development.
+     */
+    public static final boolean DEV_LOGIN_ENABLED = BuildConfig.DEBUG;
+
+    /**
+     * Load the dialog list from the proprietary backend instead of MTProto.
+     * Debug builds only: a release build keeps the original data path.
+     */
+    public static final boolean DIALOGS_FROM_PLATFORM = BuildConfig.DEBUG;
+
+    /** Chat screen (history, send, edit, delete, typing) served by our backend. */
+    public static final boolean CHAT_FROM_PLATFORM = BuildConfig.DEBUG;
+
+    /** Contacts, profiles and global search served by our backend. */
+    public static final boolean CONTACTS_FROM_PLATFORM = BuildConfig.DEBUG;
+
+    /** Local-first media sending (bubble first, upload afterwards).
+     *  Off until the APK build validates the flow: it touches the send pipeline. */
+    public static final boolean LOCAL_FIRST_MEDIA = false;
+
+    /** Photos, videos and documents through our own file store. */
+    public static final boolean MEDIA_FROM_PLATFORM = BuildConfig.DEBUG;
+    public static final String[][] DEV_LOGIN_ACCOUNTS = {
+            {"10001", "demo_alice"},
+            {"10002", "demo_bob"},
+    };
+    public static final String PLATFORM_WS_URL = "ws://10.0.2.2:8000/api/v1/ws";
+
     public static boolean DEBUG_VERSION = BuildConfig.DEBUG_VERSION;
     public static boolean LOGS_ENABLED = BuildConfig.DEBUG_VERSION;
     public static boolean DEBUG_PRIVATE_VERSION = BuildConfig.DEBUG_PRIVATE_VERSION;

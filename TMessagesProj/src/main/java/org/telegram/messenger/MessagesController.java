@@ -7772,6 +7772,10 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void loadFullUser(final TLRPC.User user, int classGuid, boolean force) {
+        if (org.telegram.platform.tl.PlatformContactsSync.isEnabled()) {
+            org.telegram.platform.tl.PlatformContactsSync.loadProfile(currentAccount, user, classGuid);
+            return;
+        }
         loadFullUser(user, classGuid, force, null);
     }
     public void loadFullUser(final TLRPC.User user, int classGuid, boolean force, Utilities.Callback<TLRPC.UserFull> whenReceivedFullUser) {
@@ -9309,6 +9313,10 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void deleteMessages(ArrayList<Integer> messages, ArrayList<Long> randoms, TLRPC.EncryptedChat encryptedChat, long dialogId, boolean forAll, int mode, boolean cacheOnly, long taskId, TLObject taskRequest, int topicId, boolean movedToScheduled, int movedToScheduledMessageId) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled()) {
+            org.telegram.platform.tl.PlatformChatSync.deleteMessages(dialogId, messages, forAll);
+            return;
+        }
         final boolean scheduled = mode == ChatActivity.MODE_SCHEDULED;
         final boolean quickReplies = mode == ChatActivity.MODE_QUICK_REPLIES;
         final boolean welcomeMessages = mode == ChatActivity.MODE_WELCOME_MESSAGES;
@@ -9991,6 +9999,16 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void deleteDialog(final long did, int onlyHistory, boolean revoke) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            if (DialogObject.isUserDialog(did)) {
+                // A private dialog has no delete on the server: hide it (Telegram's
+                // own semantics), which the backend models as archive.
+                org.telegram.platform.tl.PlatformDialogActions.setArchived(did, true, null);
+            } else {
+                org.telegram.platform.tl.PlatformDialogActions.delete(did, null);
+            }
+            return;
+        }
         deleteDialog(did, 1, onlyHistory, 0, revoke, null, 0);
     }
 
@@ -11355,6 +11373,34 @@ public class MessagesController extends BaseController implements NotificationCe
         });
     }
 
+    /**
+     * Shows or clears the "typing…" line for a chat opened by the platform
+     * transport. It writes the exact structures MTProto updates write, so the
+     * subtitle, the dot animation and the enter-button state stay untouched.
+     */
+    public void platformSetTyping(long dialogId, long userId, boolean typing) {
+        AndroidUtilities.runOnUIThread(() -> {
+            if (typing) {
+                LongSparseArray<CharSequence> inner = printingStrings.get(dialogId);
+                if (inner == null) {
+                    inner = new LongSparseArray<>();
+                    printingStrings.put(dialogId, inner);
+                }
+                inner.put(0, LocaleController.getString(R.string.Typing));
+                LongSparseArray<Integer> types = printingStringsTypes.get(dialogId);
+                if (types == null) {
+                    types = new LongSparseArray<>();
+                    printingStringsTypes.put(dialogId, types);
+                }
+                types.put(0, 0);
+            } else {
+                printingStrings.remove(dialogId);
+                printingStringsTypes.remove(dialogId);
+            }
+            getNotificationCenter().postNotificationName(NotificationCenter.updateInterfaces, UPDATE_MASK_ALL);
+        });
+    }
+
     public void cancelTyping(int action, long dialogId, long threadMsgId) {
         if (action < 0 || action >= sendingTypings.length || sendingTypings[action] == null) {
             return;
@@ -11371,6 +11417,10 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean sendTyping(long dialogId, long threadMsgId, int action, int classGuid) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled()) {
+            org.telegram.platform.tl.PlatformChatSync.sendTyping(dialogId);
+            return true;
+        }
         return sendTyping(dialogId, threadMsgId, action, null, classGuid);
     }
 
@@ -11506,6 +11556,12 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void loadMessages(long dialogId, long mergeDialogId, boolean loadInfo, int count, int max_id, int offset_date, boolean fromCache, int midDate, int classGuid, int load_type, int last_message_id, int mode, long threadMessageId, int loadIndex, int first_unread, int unread_count, int last_date, boolean queryFromServer, int mentionsCount, boolean isTopic) {
+        if (org.telegram.platform.tl.PlatformChatSync.isEnabled()) {
+            // History comes from our own backend; ChatActivity still receives the
+            // same messagesDidLoad notification it always did.
+            org.telegram.platform.tl.PlatformChatSync.loadHistory(dialogId, count, classGuid, loadIndex);
+            return;
+        }
         loadMessagesInternal(dialogId, mergeDialogId, loadInfo, count, max_id, offset_date, fromCache, midDate, classGuid, load_type, last_message_id, mode, threadMessageId, loadIndex, first_unread, unread_count, last_date, queryFromServer, mentionsCount, true, true, isTopic, null, 0L);
     }
 
@@ -12363,6 +12419,11 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public int addDialogToFolder(long dialogId, int folderId, int pinnedNum, long taskId) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            // folderId 1 is the archive folder in Telegram's own numbering.
+            org.telegram.platform.tl.PlatformDialogActions.setArchived(dialogId, folderId == 1, null);
+            return 0;
+        }
         ArrayList<Long> arrayList = new ArrayList<>(1);
         arrayList.add(dialogId);
         return addDialogToFolder(arrayList, folderId, pinnedNum, null, taskId);
@@ -14669,6 +14730,11 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void markDialogAsRead(long dialogId, int maxPositiveId, int maxNegativeId, int maxDate, boolean popup, long threadId, int countDiff, boolean readNow, int scheduledCount) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            // The unread counter is owned by the backend; send a real read receipt.
+            org.telegram.platform.tl.PlatformDialogActions.markRead(dialogId, Math.max(0, maxPositiveId), null);
+            return;
+        }
         boolean createReadTask;
 
         if (threadId != 0) {
@@ -16127,6 +16193,9 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public void performLogout(int type) {
+        if (org.telegram.platform.PlatformBridge.isReady()) {
+            org.telegram.platform.PlatformBridge.get().endSession();
+        }
         if (type == 1) {
             GramWalletStorage.wipeForUser(ApplicationLoader.applicationContext, currentAccount, getUserConfig().getClientUserId());
             unregistedPush();
@@ -17275,6 +17344,11 @@ public class MessagesController extends BaseController implements NotificationCe
     }
 
     public boolean pinDialog(long dialogId, boolean pin, TLRPC.InputPeer peer, long taskId) {
+        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+            // Pin state lives in our backend; every entry point (menu, swipe) lands here.
+            org.telegram.platform.tl.PlatformDialogActions.setPinned(dialogId, pin, null);
+            return true;
+        }
         TLRPC.Dialog dialog = dialogs_dict.get(dialogId);
         if (dialog == null || dialog.pinned == pin) {
             return dialog != null;

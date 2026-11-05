@@ -3598,6 +3598,9 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
                         avatarImage.setImage(null, null, avatarDrawable, null, user, 0);
                     } else {
                         avatarImage.setForUserOrChat(user, avatarDrawable, null, true, VectorAvatarThumbDrawable.TYPE_SMALL, false);
+                        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+                            org.telegram.platform.tl.PlatformAvatars.apply(avatarImage, currentDialogId);
+                        }
                     }
                 } else if (chat != null) {
                     TLRPC.Chat chat = this.chat;
@@ -3607,6 +3610,9 @@ public class DialogCell extends BaseCell implements StoriesListPlaceProvider.Ava
                     } else {
                         avatarDrawable.setInfo(currentAccount, chat);
                         avatarImage.setForUserOrChat(chat, avatarDrawable);
+                        if (org.telegram.platform.tl.PlatformDialogsSync.isEnabled()) {
+                            org.telegram.platform.tl.PlatformAvatars.apply(avatarImage, currentDialogId);
+                        }
                     }
                 }
             }
