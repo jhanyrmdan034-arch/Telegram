@@ -117,9 +117,9 @@ public class SearchAdapter extends RecyclerListView.SelectionAdapter {
             final int generation = ++platformSearchGeneration;
             if (query != null && !query.trim().isEmpty()) {
                 org.telegram.platform.tl.PlatformContactsSync.searchGlobal(query,
-                        new org.telegram.platform.repo.Callback<java.util.ArrayList<org.telegram.tgnet.TLRPC.User>>() {
+                        new org.telegram.platform.repo.Callback<java.util.List<org.telegram.tgnet.TLRPC.User>>() {
                             @Override
-                            public void onSuccess(java.util.ArrayList<org.telegram.tgnet.TLRPC.User> users) {
+                            public void onSuccess(java.util.List<org.telegram.tgnet.TLRPC.User> users) {
                                 if (generation != platformSearchGeneration) {
                                     return;
                                 }
