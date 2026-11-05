@@ -157,3 +157,14 @@ docker compose up -d --build
 - **کامپایل/APK انجام نشد**: نبود JDK/SDK در سندباکس و ۴۰۳ برای `workflow_dispatch`
   (پرمیشن `Actions: write`). PR #1 باز است و trigger `pull_request` اضافه شد ولی هیچ run‌ای
   ساخته نشد. اقدام لازم از مالک مخزن در `docs/android/phase6.2-local-first-fa.md` §۳ آمده است.
+
+### فاز ۶.۲ — نتیجهٔ Build واقعی (CI)
+
+- کامپایل واقعی GitHub Actions: **✅ موفق** (JDK 17 + Android SDK 36)، ران‌های `41985868648` و `41993496049`.
+- APK Release arm64: **✅ ساخته و آپلود شد** (`Telegram-13.1.1-arm64.apk`، آرتیفکت `Telegram-apk-arm64`،
+  run `41993496049`، artifact id `13401493442`)؛ دانلود از سندباکس ممکن نیست (دامنهٔ blob مسدود).
+- در جریان کامپایل ۴ خطای واقعی کد (از فازهای قبل و فاز ۶) پیدا و اصلاح شد.
+- `Emulator smoke test`: ابتدا ناموفق به دلیل ناسازگاری پکیج debug با `google-services.json`؛
+  علت اصلاح شد و ران تأییدی `42001642614` در جریان است.
+- `LOCAL_FIRST_MEDIA` خاموش می‌ماند تا اجرای واقعی روی دستگاه تأیید شود.
+- جزئیات: `docs/android/phase6.2-build-validation-fa.md` — برنامهٔ فاز ۷: `docs/android/phase7-plan-fa.md`
