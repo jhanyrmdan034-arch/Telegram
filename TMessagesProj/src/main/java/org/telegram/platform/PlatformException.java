@@ -47,6 +47,14 @@ public class PlatformException extends Exception {
         this.retryAfterSeconds = retryAfterSeconds;
     }
 
+    /** Failure detected before a response existed (socket, timeout, cancel). */
+    public PlatformException(String message, int statusCode, Throwable cause) {
+        this(kindForStatus(statusCode), statusCode, message, null, 0L);
+        if (cause != null) {
+            initCause(cause);
+        }
+    }
+
     public Kind kind() {
         return kind;
     }
@@ -73,7 +81,7 @@ public class PlatformException extends Exception {
         return kind == Kind.UNAUTHORIZED;
     }
 
-    static Kind kindForStatus(int status) {
+    public static Kind kindForStatus(int status) {
         switch (status) {
             case 401:
                 return Kind.UNAUTHORIZED;

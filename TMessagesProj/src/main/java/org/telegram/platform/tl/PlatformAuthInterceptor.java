@@ -11,6 +11,7 @@ import org.telegram.platform.PlatformBridge;
 import org.telegram.platform.PlatformException;
 import org.telegram.platform.auth.PhoneIdentity;
 import org.telegram.tgnet.ConnectionsManager;
+import org.telegram.tgnet.RequestDelegate;
 import org.telegram.tgnet.TLObject;
 import org.telegram.tgnet.TLRPC;
 
@@ -54,7 +55,7 @@ public final class PlatformAuthInterceptor {
     }
 
     /** True when the request was taken over; the MTProto transport must then be skipped. */
-    public static boolean intercept(TLObject request, ConnectionsManager.RequestDelegate onComplete) {
+    public static boolean intercept(TLObject request, RequestDelegate onComplete) {
         if (request == null || onComplete == null || !PlatformBridge.isReady()) {
             return false;
         }
